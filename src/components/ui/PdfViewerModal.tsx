@@ -220,9 +220,27 @@ export function PdfPreviewModal({
         let mime = 'application/pdf';
 
         if (blobUrlOverride) {
-          const res = await fetch(blobUrlOverride);
-          if (!res.ok) throw new Error(t('failedToLoadDocument'));
-          const blob = await res.blob();
+          let blob: Blob;
+          try {
+            const res = await fetch(blobUrlOverride);
+            if (!res.ok) throw new Error('fetch failed');
+            blob = await res.blob();
+          } catch {
+            blob = await new Promise<Blob>((resolve, reject) => {
+              const xhr = new XMLHttpRequest();
+              xhr.open('GET', blobUrlOverride, true);
+              xhr.responseType = 'blob';
+              xhr.onload = () => {
+                if (xhr.status === 200 || xhr.status === 0) {
+                  resolve(xhr.response);
+                } else {
+                  reject(new Error(t('failedToLoadDocument')));
+                }
+              };
+              xhr.onerror = () => reject(new Error(t('failedToLoadDocument')));
+              xhr.send();
+            });
+          }
           mime = blob.type || 'application/pdf';
           buffer = await blob.arrayBuffer();
           if (active) setDownloadUrl(blobUrlOverride);
