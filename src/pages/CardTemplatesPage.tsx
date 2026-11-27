@@ -10,7 +10,7 @@ import {
   Star,
   LayoutGrid,
 } from 'lucide-react';
-import { apiFetch, uploadProtectedFile } from '../lib/api';
+import { apiFetch, fetchBinaryPost, uploadProtectedFile } from '../lib/api';
 import { auth } from '../firebase';
 import { isSupportedBrandingImageFile, prepareBrandingImageFile } from '../lib/imageUpload';
 import { useAuth } from '../contexts/AuthContext';
@@ -316,7 +316,6 @@ export function CardTemplatesPage() {
     setPreviewing(true);
     setError(null);
     try {
-      const token = await auth.currentUser?.getIdToken();
       const tplPayload: Partial<CardTemplate> = tplOverride || {
         name: name || 'Preview',
         scope,
@@ -325,19 +324,7 @@ export function CardTemplatesPage() {
         heightMm,
         config: { ...config, languageMode },
       };
-      const res = await fetch('/api/templates/cards/preview', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ template: tplPayload }),
-      });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || 'Failed to render preview PDF');
-      }
-      const blob = await res.blob();
+      const blob = await fetchBinaryPost('/api/templates/cards/preview', { template: tplPayload });
       if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl);
       setPreviewBlobUrl(URL.createObjectURL(blob));
     } catch (err) {

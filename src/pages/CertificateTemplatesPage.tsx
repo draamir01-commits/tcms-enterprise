@@ -10,7 +10,7 @@ import {
   Star,
   LayoutGrid,
 } from 'lucide-react';
-import { apiFetch, uploadProtectedFile } from '../lib/api';
+import { apiFetch, fetchBinaryPost, uploadProtectedFile } from '../lib/api';
 import { auth } from '../firebase';
 import { isSupportedBrandingImageFile, prepareBrandingImageFile } from '../lib/imageUpload';
 import { useAuth } from '../contexts/AuthContext';
@@ -332,7 +332,6 @@ export function CertificateTemplatesPage() {
     setPreviewing(true);
     setError(null);
     try {
-      const token = await auth.currentUser?.getIdToken();
       const tplPayload: Partial<CertificateTemplate> = tplOverride || {
         name: name || 'Preview Certificate',
         scope,
@@ -340,19 +339,7 @@ export function CertificateTemplatesPage() {
         languageMode,
         config: { ...config, languageMode },
       };
-      const res = await fetch('/api/templates/certificates/preview', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ template: tplPayload }),
-      });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || 'Failed to render certificate preview PDF');
-      }
-      const blob = await res.blob();
+      const blob = await fetchBinaryPost('/api/templates/certificates/preview', { template: tplPayload });
       if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl);
       setPreviewBlobUrl(URL.createObjectURL(blob));
     } catch (err) {

@@ -12,7 +12,7 @@ import {
   Plus,
   Layers,
 } from 'lucide-react';
-import { apiFetch, downloadProtectedFile } from '../lib/api';
+import { apiFetch, downloadProtectedFile, fetchBinaryPost } from '../lib/api';
 import { auth } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -235,23 +235,10 @@ export function TrainingCardsPage() {
     if (!genEnrollmentId) return;
     setError(null);
     try {
-      const token = await auth.currentUser?.getIdToken();
-      const res = await fetch('/api/templates/cards/preview', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          enrollmentId: genEnrollmentId,
-          ...(genTemplateId ? { templateId: genTemplateId } : {}),
-        }),
+      const blob = await fetchBinaryPost('/api/templates/cards/preview', {
+        enrollmentId: genEnrollmentId,
+        ...(genTemplateId ? { templateId: genTemplateId } : {}),
       });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || 'Preview generation failed');
-      }
-      const blob = await res.blob();
       if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl);
       setPreviewBlobUrl(URL.createObjectURL(blob));
     } catch (err) {

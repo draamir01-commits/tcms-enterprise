@@ -115,3 +115,34 @@ export async function uploadProtectedFile(
   });
   return data.file;
 }
+
+export async function fetchBinaryPost(url: string, body: unknown): Promise<Blob> {
+  const user = auth.currentUser;
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+  });
+  if (user) {
+    const token = await user.getIdToken();
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  const tenantId = getActiveTenantId();
+  if (tenantId) {
+    headers.set('x-tenant-id', tenantId);
+  }
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let errJson: Record<string, unknown> = {};
+    try {
+      errJson = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+    } catch {
+      // ignore
+    }
+    throw new Error(String(errJson.error || text || `Request failed (${res.status})`));
+  }
+  return await res.blob();
+}
