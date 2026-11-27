@@ -1,0 +1,1879 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Global Primitives, Tenant Isolation & Platform Role Helpers
+    // -------------------------------------------------------------------------
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 160 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidTimestamp(ts) {
+      return ts is timestamp && ts == request.time;
+    }
+
+    function isBootstrappedSuperAdmin() {
+      return isVerified() && 'email' in request.auth.token && request.auth.token.email == 'dr.aamir01@gmail.com';
+    }
+
+    function hasUserDoc() {
+      return isVerified() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function currentUser() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasSaasUserDoc() {
+      return isVerified() && exists(/databases/$(database)/documents/saasUsers/$(request.auth.uid));
+    }
+
+    function currentSaasUser() {
+      return get(/databases/$(database)/documents/saasUsers/$(request.auth.uid)).data;
+    }
+
+    function isPlatformSuperAdmin() {
+      return isBootstrappedSuperAdmin()
+        || (hasSaasUserDoc() && currentSaasUser().status == 'active' && 'platformRole' in currentSaasUser() && currentSaasUser().platformRole == 'platform_super_admin')
+        || (hasUserDoc() && currentUser().status == 'active' && 'platformRole' in currentUser() && currentUser().platformRole == 'platform_super_admin');
+    }
+
+    function isActiveUser() {
+      return !isPlatformSuperAdmin() && hasUserDoc() && currentUser().status == 'active';
+    }
+
+    function userRole() {
+      return currentUser().role;
+    }
+
+    function userTenantId() {
+      return (isActiveUser() && 'tenantId' in currentUser() && currentUser().tenantId is string)
+        ? currentUser().tenantId
+        : 'tenant_default';
+    }
+
+    function hasTenantMembership(tenantId) {
+      return !isPlatformSuperAdmin()
+        && isVerified()
+        && isValidId(tenantId)
+        && exists(/databases/$(database)/documents/tenantMemberships/$(tenantId + '__' + request.auth.uid))
+        && get(/databases/$(database)/documents/tenantMemberships/$(tenantId + '__' + request.auth.uid)).data.status == 'active';
+    }
+
+    function tenantMembershipRole(tenantId) {
+      return get(/databases/$(database)/documents/tenantMemberships/$(tenantId + '__' + request.auth.uid)).data.role;
+    }
+
+    function docMatchesTenant(data) {
+      return !isPlatformSuperAdmin() && (
+        ('tenantId' in data && data.tenantId is string && (data.tenantId == userTenantId() || hasTenantMembership(data.tenantId)))
+        || (!('tenantId' in data) && userTenantId() == 'tenant_default')
+      );
+    }
+
+    function incomingMatchesTenant(data) {
+      return !isPlatformSuperAdmin() && (
+        ('tenantId' in data && data.tenantId is string && (data.tenantId == userTenantId() || hasTenantMembership(data.tenantId)))
+        || (!('tenantId' in data) && userTenantId() == 'tenant_default')
+      );
+    }
+
+    function isSuperAdmin() {
+      return !isPlatformSuperAdmin() && isActiveUser() && userRole() in ['super_admin', 'tenant_owner'];
+    }
+
+    function isAdmin() {
+      return isSuperAdmin()
+        || (isActiveUser() && userRole() in ['admin', 'tenant_admin']);
+    }
+
+    function isCertificateOfficer() {
+      return isSuperAdmin() || (isActiveUser() && userRole() == 'certificate_officer');
+    }
+
+    function isTrainer() {
+      return isActiveUser() && userRole() == 'trainer';
+    }
+
+    function isCorporateClient() {
+      return isActiveUser() && userRole() == 'corporate_client';
+    }
+
+    function isStaff() {
+      return isSuperAdmin() || isAdmin() || isCertificateOfficer() || isTrainer();
+    }
+
+    function isSameOrg(orgId) {
+      return isCorporateClient() && 'organizationId' in currentUser() && currentUser().organizationId is string && currentUser().organizationId == orgId;
+    }
+
+    function tokenEmailLower() {
+      return ('email' in request.auth.token && request.auth.token.email is string)
+        ? request.auth.token.email.lower()
+        : '';
+    }
+
+    function isPendingInviteDocForRole(invDoc, role) {
+      return invDoc.data.status == 'pending' && invDoc.data.role == role;
+    }
+
+    function isPendingInviteDocForTenant(invDoc, tenantId) {
+      return invDoc.data.status == 'pending'
+        && (!('tenantId' in invDoc.data) || invDoc.data.tenantId == tenantId);
+    }
+
+    function hasPendingInviteForEmail(tenantId, role) {
+      return tokenEmailLower().size() >= 3 && (
+        (
+          exists(/databases/$(database)/documents/userInvites/$(tenantId + '_' + hashing.sha256(tokenEmailLower()).toHexString().lower()[0:40])) &&
+          isPendingInviteDocForRole(get(/databases/$(database)/documents/userInvites/$(tenantId + '_' + hashing.sha256(tokenEmailLower()).toHexString().lower()[0:40])), role)
+        ) || (
+          exists(/databases/$(database)/documents/userInvites/$(hashing.sha256(tokenEmailLower()).toHexString().lower()[0:40])) &&
+          isPendingInviteDocForRole(get(/databases/$(database)/documents/userInvites/$(hashing.sha256(tokenEmailLower()).toHexString().lower()[0:40])), role)
+        )
+      );
+    }
+
+    function hasPendingInviteForTenant(tenantId) {
+      return isVerified()
+        && isValidId(tenantId)
+        && tokenEmailLower().size() >= 3
+        && (
+          (
+            exists(/databases/$(database)/documents/userInvites/$(tenantId + '_' + hashing.sha256(tokenEmailLower()).toHexString().lower()[0:40])) &&
+            get(/databases/$(database)/documents/userInvites/$(tenantId + '_' + hashing.sha256(tokenEmailLower()).toHexString().lower()[0:40])).data.status == 'pending'
+          ) || (
+            exists(/databases/$(database)/documents/userInvites/$(hashing.sha256(tokenEmailLower()).toHexString().lower()[0:40])) &&
+            isPendingInviteDocForTenant(get(/databases/$(database)/documents/userInvites/$(hashing.sha256(tokenEmailLower()).toHexString().lower()[0:40])), tenantId)
+          )
+        );
+    }
+
+    function matchesPendingTenantRegDoc(regDoc, tenantId) {
+      return regDoc.data.ownerUid == request.auth.uid
+        && regDoc.data.ownerEmail.lower() == tokenEmailLower()
+        && regDoc.data.proposedTenantId == tenantId;
+    }
+
+    function hasPendingTenantRegistration(tenantId) {
+      return isVerified()
+        && isValidId(tenantId)
+        && exists(/databases/$(database)/documents/pendingTenantRegistrations/$(request.auth.uid))
+        && matchesPendingTenantRegDoc(get(/databases/$(database)/documents/pendingTenantRegistrations/$(request.auth.uid)), tenantId);
+    }
+
+    function matchesOwnedTenantDoc(tenantDoc) {
+      return 'ownerUserId' in tenantDoc.data
+        && tenantDoc.data.ownerUserId == request.auth.uid;
+    }
+
+    function ownsActiveRegisteredTenant(tenantId) {
+      return isVerified()
+        && isValidId(tenantId)
+        && exists(/databases/$(database)/documents/saasTenants/$(tenantId))
+        && matchesOwnedTenantDoc(get(/databases/$(database)/documents/saasTenants/$(tenantId)));
+    }
+
+    // -------------------------------------------------------------------------
+    // SaaS Platform Entity Validation Helpers
+    // -------------------------------------------------------------------------
+    function isValidSaasTenant(data) {
+      return data.keys().hasAll(['tenantId', 'tenantCode', 'nameEn', 'nameAr', 'slug', 'status', 'planCode', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'tenantCode', 'nameEn', 'nameAr', 'legalName', 'crNumber', 'vatNumber', 'slug', 'contactEmail', 'contactPhone', 'country', 'city', 'address', 'website', 'status', 'planCode', 'billingCycle', 'trialStartsAt', 'trialEndsAt', 'isDefaultLegacyTenant', 'migrationCompleted', 'onboardingCompleted', 'defaultLanguage', 'timezone', 'ownerUserId', 'createdBy', 'activatedAt', 'migratedAt', 'migratedBy', 'createdAt', 'updatedAt'])
+        && isValidId(data.tenantId)
+        && data.tenantCode is string && data.tenantCode.size() >= 2 && data.tenantCode.size() <= 32
+        && data.nameEn is string && data.nameEn.size() >= 2 && data.nameEn.size() <= 200
+        && data.nameAr is string && data.nameAr.size() >= 2 && data.nameAr.size() <= 200
+        && (!('legalName' in data) || (data.legalName is string && data.legalName.size() <= 240))
+        && (!('crNumber' in data) || (data.crNumber is string && data.crNumber.size() <= 64))
+        && (!('vatNumber' in data) || (data.vatNumber is string && data.vatNumber.size() <= 40))
+        && data.slug is string && data.slug.size() >= 1 && data.slug.size() <= 120
+        && (!('contactEmail' in data) || (data.contactEmail is string && data.contactEmail.size() <= 200))
+        && (!('contactPhone' in data) || (data.contactPhone is string && data.contactPhone.size() <= 40))
+        && (!('country' in data) || (data.country is string && data.country.size() <= 80))
+        && (!('city' in data) || (data.city is string && data.city.size() <= 120))
+        && (!('address' in data) || (data.address is string && data.address.size() <= 400))
+        && (!('website' in data) || (data.website is string && data.website.size() <= 200))
+        && data.status in ['trial', 'active', 'grace_period', 'suspended', 'cancelled']
+        && data.planCode is string && data.planCode.size() >= 2 && data.planCode.size() <= 48
+        && (!('billingCycle' in data) || data.billingCycle in ['monthly', 'annual'])
+        && (!('trialStartsAt' in data) || (data.trialStartsAt is string && data.trialStartsAt.size() <= 40))
+        && (!('trialEndsAt' in data) || (data.trialEndsAt is string && data.trialEndsAt.size() <= 40))
+        && (!('isDefaultLegacyTenant' in data) || data.isDefaultLegacyTenant is bool)
+        && (!('migrationCompleted' in data) || data.migrationCompleted is bool)
+        && (!('onboardingCompleted' in data) || data.onboardingCompleted is bool)
+        && (!('defaultLanguage' in data) || data.defaultLanguage in ['en', 'ar'])
+        && (!('timezone' in data) || (data.timezone is string && data.timezone.size() <= 64))
+        && (!('ownerUserId' in data) || (data.ownerUserId is string && data.ownerUserId.size() <= 128))
+        && (!('createdBy' in data) || (data.createdBy is string && data.createdBy.size() <= 128))
+        && (!('activatedAt' in data) || (data.activatedAt is string && data.activatedAt.size() <= 40))
+        && (!('migratedAt' in data) || (data.migratedAt is string && data.migratedAt.size() <= 40))
+        && (!('migratedBy' in data) || (data.migratedBy is string && data.migratedBy.size() <= 128))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSaasUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'phone', 'preferredLanguage', 'platformRole', 'defaultTenantId', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 160
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 32))
+        && (!('preferredLanguage' in data) || data.preferredLanguage in ['en', 'ar'])
+        && (!('platformRole' in data) || data.platformRole in ['platform_super_admin', 'platform_admin', 'platform_support', 'platform_finance'])
+        && (!('defaultTenantId' in data) || (data.defaultTenantId is string && data.defaultTenantId.size() <= 128))
+        && data.status in ['active', 'suspended']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTenantMembership(data) {
+      return data.keys().hasAll(['tenantId', 'uid', 'email', 'role', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'uid', 'email', 'displayName', 'role', 'status', 'organizationId', 'trainerId', 'candidateId', 'isDefault', 'createdBy', 'createdAt', 'updatedAt'])
+        && isValidId(data.tenantId)
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 160))
+        && data.role in ['super_admin', 'tenant_owner', 'admin', 'tenant_admin', 'certificate_officer', 'trainer', 'corporate_client', 'candidate']
+        && data.status in ['active', 'invited', 'suspended']
+        && (!('organizationId' in data) || (data.organizationId is string && data.organizationId.size() <= 128))
+        && (!('trainerId' in data) || (data.trainerId is string && data.trainerId.size() <= 128))
+        && (!('candidateId' in data) || (data.candidateId is string && data.candidateId.size() <= 128))
+        && (!('isDefault' in data) || data.isDefault is bool)
+        && (!('createdBy' in data) || (data.createdBy is string && data.createdBy.size() <= 128))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPlatformSettings(data) {
+      return data.keys().hasAll(['key', 'config', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['key', 'config', 'updatedBy', 'updatedAt'])
+        && data.key is string && data.key.size() <= 64
+        && data.config is map
+        && data.updatedBy is string && data.updatedBy.size() <= 128
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPlatformAuditLog(data) {
+      return data.keys().hasAll(['actorUid', 'platformRole', 'action', 'entityType', 'entityId', 'createdAt'])
+        && data.keys().hasOnly(['actorUid', 'actorEmail', 'platformRole', 'action', 'entityType', 'entityId', 'tenantId', 'details', 'createdAt'])
+        && data.actorUid is string && data.actorUid.size() <= 128
+        && (!('actorEmail' in data) || (data.actorEmail is string && data.actorEmail.size() <= 200))
+        && data.platformRole in ['platform_super_admin', 'platform_admin', 'platform_support', 'platform_finance']
+        && data.action is string && data.action.size() <= 120
+        && data.entityType is string && data.entityType.size() <= 80
+        && data.entityId is string && data.entityId.size() <= 128
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && (!('details' in data) || (data.details is string && data.details.size() <= 2000))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSubscriptionPlan(data) {
+      return data.keys().hasAll(['code', 'nameEn', 'nameAr', 'priceMonthly', 'priceAnnual', 'currency', 'isActive', 'updatedAt'])
+        && data.keys().hasOnly(['code', 'nameEn', 'nameAr', 'taglineEn', 'taglineAr', 'priceMonthly', 'priceAnnual', 'currency', 'recommended', 'isActive', 'displayOrder', 'featuresEn', 'featuresAr', 'limits', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.code is string && data.code.size() >= 2 && data.code.size() <= 48
+        && data.nameEn is string && data.nameEn.size() >= 1 && data.nameEn.size() <= 120
+        && data.nameAr is string && data.nameAr.size() >= 1 && data.nameAr.size() <= 120
+        && (!('taglineEn' in data) || (data.taglineEn is string && data.taglineEn.size() <= 240))
+        && (!('taglineAr' in data) || (data.taglineAr is string && data.taglineAr.size() <= 240))
+        && data.priceMonthly is number && data.priceMonthly >= 0
+        && data.priceAnnual is number && data.priceAnnual >= 0
+        && data.currency is string && data.currency.size() >= 2 && data.currency.size() <= 8
+        && (!('recommended' in data) || data.recommended is bool)
+        && data.isActive is bool
+        && (!('displayOrder' in data) || data.displayOrder is number)
+        && (!('featuresEn' in data) || (data.featuresEn is list && data.featuresEn.size() <= 20 && (data.featuresEn.size() == 0 || data.featuresEn[0] is string)))
+        && (!('featuresAr' in data) || (data.featuresAr is list && data.featuresAr.size() <= 20 && (data.featuresAr.size() == 0 || data.featuresAr[0] is string)))
+        && (!('limits' in data) || data.limits is map)
+        && (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 128))
+        && (!('createdAt' in data) || data.createdAt is timestamp)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPlatformLead(data) {
+      return data.keys().hasAll(['name', 'email', 'subject', 'message', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['name', 'email', 'phone', 'companyName', 'subject', 'message', 'preferredLanguage', 'status', 'createdAt', 'updatedAt'])
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 160
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 40))
+        && (!('companyName' in data) || (data.companyName is string && data.companyName.size() <= 200))
+        && data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 200
+        && data.message is string && data.message.size() >= 10 && data.message.size() <= 3000
+        && (!('preferredLanguage' in data) || data.preferredLanguage in ['en', 'ar'])
+        && data.status in ['new', 'reviewed', 'resolved']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPendingTenantRegistration(data) {
+      return data.keys().hasAll(['ownerUid', 'ownerEmail', 'ownerDisplayName', 'proposedTenantId', 'nameEn', 'planCode', 'billingCycle', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'ownerEmail', 'ownerDisplayName', 'ownerMobile', 'proposedTenantId', 'nameEn', 'nameAr', 'legalName', 'crNumber', 'vatNumber', 'country', 'city', 'address', 'website', 'companyEmail', 'companyPhone', 'planCode', 'billingCycle', 'defaultLanguage', 'createdAt', 'updatedAt'])
+        && isValidId(data.ownerUid)
+        && data.ownerEmail is string && data.ownerEmail.size() >= 3 && data.ownerEmail.size() <= 200
+        && data.ownerDisplayName is string && data.ownerDisplayName.size() >= 2 && data.ownerDisplayName.size() <= 160
+        && (!('ownerMobile' in data) || (data.ownerMobile is string && data.ownerMobile.size() <= 32))
+        && isValidId(data.proposedTenantId)
+        && data.nameEn is string && data.nameEn.size() >= 2 && data.nameEn.size() <= 200
+        && (!('nameAr' in data) || (data.nameAr is string && data.nameAr.size() <= 200))
+        && (!('legalName' in data) || (data.legalName is string && data.legalName.size() <= 240))
+        && (!('crNumber' in data) || (data.crNumber is string && data.crNumber.size() <= 64))
+        && (!('vatNumber' in data) || (data.vatNumber is string && data.vatNumber.size() <= 40))
+        && (!('country' in data) || (data.country is string && data.country.size() <= 80))
+        && (!('city' in data) || (data.city is string && data.city.size() <= 120))
+        && (!('address' in data) || (data.address is string && data.address.size() <= 400))
+        && (!('website' in data) || (data.website is string && data.website.size() <= 200))
+        && (!('companyEmail' in data) || (data.companyEmail is string && data.companyEmail.size() <= 200))
+        && (!('companyPhone' in data) || (data.companyPhone is string && data.companyPhone.size() <= 40))
+        && data.planCode is string && data.planCode.size() >= 2 && data.planCode.size() <= 48
+        && data.billingCycle in ['monthly', 'annual']
+        && (!('defaultLanguage' in data) || data.defaultLanguage in ['en', 'ar'])
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // Entity Validation Helpers (Anti-Update-Gap Blueprints)
+    // -------------------------------------------------------------------------
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'preferredLanguage', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'phone', 'role', 'tenantId', 'platformRole', 'organizationId', 'trainerId', 'candidateId', 'permissions', 'preferredLanguage', 'status', 'lastLoginAt', 'lastAuthTime', 'authProvider', 'createdBy', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 160
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 32))
+        && data.role in ['super_admin', 'tenant_owner', 'admin', 'tenant_admin', 'certificate_officer', 'trainer', 'corporate_client', 'candidate']
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && (!('platformRole' in data) || data.platformRole in ['platform_super_admin', 'platform_admin', 'platform_support', 'platform_finance'])
+        && data.preferredLanguage in ['en', 'ar']
+        && data.status in ['active', 'suspended']
+        && (!('organizationId' in data) || (data.organizationId is string && data.organizationId.size() <= 128))
+        && (!('trainerId' in data) || (data.trainerId is string && data.trainerId.size() <= 128))
+        && (!('candidateId' in data) || (data.candidateId is string && data.candidateId.size() <= 128))
+        && (!('permissions' in data) || data.permissions is map)
+        && (!('lastLoginAt' in data) || (data.lastLoginAt is string && data.lastLoginAt.size() <= 40))
+        && (!('lastAuthTime' in data) || (data.lastAuthTime is number && data.lastAuthTime >= 0))
+        && (!('authProvider' in data) || (data.authProvider is string && data.authProvider.size() <= 40))
+        && (!('createdBy' in data) || (data.createdBy is string && data.createdBy.size() <= 128))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserInvite(data) {
+      return data.keys().hasAll(['email', 'role', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'email', 'displayName', 'role', 'organizationId', 'trainerId', 'candidateId', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 160))
+        && data.role in ['super_admin', 'tenant_owner', 'admin', 'tenant_admin', 'certificate_officer', 'trainer', 'corporate_client', 'candidate']
+        && data.status in ['pending', 'claimed', 'revoked']
+        && (!('organizationId' in data) || (data.organizationId is string && data.organizationId.size() <= 128))
+        && (!('trainerId' in data) || (data.trainerId is string && data.trainerId.size() <= 128))
+        && (!('candidateId' in data) || (data.candidateId is string && data.candidateId.size() <= 128))
+        && data.createdBy is string && data.createdBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCandidate(data) {
+      return data.keys().hasAll(['candidateId', 'fullNameEn', 'fullNameAr', 'nationality', 'mobile', 'registrationDate', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'candidateId', 'userId', 'fullNameEn', 'fullNameAr', 'gender', 'iqamaEncrypted', 'iqamaMasked', 'iqamaHash', 'iqamaExpiryDate', 'passportEncrypted', 'passportMasked', 'passportHash', 'passportExpiryDate', 'nationality', 'dateOfBirth', 'mobile', 'email', 'organizationId', 'companyName', 'employeeId', 'jobTitle', 'department', 'workLocation', 'address', 'emergencyContact', 'notes', 'photoFileId', 'registrationDate', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.candidateId is string && data.candidateId.size() >= 3 && data.candidateId.size() <= 40
+        && data.fullNameEn is string && data.fullNameEn.size() >= 2 && data.fullNameEn.size() <= 200
+        && data.fullNameAr is string && data.fullNameAr.size() >= 2 && data.fullNameAr.size() <= 200
+        && (!('gender' in data) || data.gender in ['male', 'female'])
+        && data.nationality is string && data.nationality.size() >= 2 && data.nationality.size() <= 100
+        && data.mobile is string && data.mobile.size() >= 5 && data.mobile.size() <= 32
+        && data.registrationDate is string && data.registrationDate.size() <= 32
+        && data.status in ['active', 'inactive', 'archived', 'suspended']
+        && data.createdBy is string && data.createdBy.size() <= 128
+        && (!('userId' in data) || (data.userId is string && data.userId.size() <= 128))
+        && (!('iqamaEncrypted' in data) || (data.iqamaEncrypted is string && data.iqamaEncrypted.size() <= 512))
+        && (!('iqamaMasked' in data) || (data.iqamaMasked is string && data.iqamaMasked.size() <= 32))
+        && (!('iqamaHash' in data) || (data.iqamaHash is string && data.iqamaHash.size() <= 128))
+        && (!('iqamaExpiryDate' in data) || (data.iqamaExpiryDate is string && data.iqamaExpiryDate.size() <= 32))
+        && (!('passportEncrypted' in data) || (data.passportEncrypted is string && data.passportEncrypted.size() <= 512))
+        && (!('passportMasked' in data) || (data.passportMasked is string && data.passportMasked.size() <= 32))
+        && (!('passportHash' in data) || (data.passportHash is string && data.passportHash.size() <= 128))
+        && (!('passportExpiryDate' in data) || (data.passportExpiryDate is string && data.passportExpiryDate.size() <= 32))
+        && (!('dateOfBirth' in data) || (data.dateOfBirth is string && data.dateOfBirth.size() <= 32))
+        && (!('email' in data) || (data.email is string && data.email.size() <= 200))
+        && (!('organizationId' in data) || (data.organizationId is string && data.organizationId.size() <= 128))
+        && (!('companyName' in data) || (data.companyName is string && data.companyName.size() <= 200))
+        && (!('employeeId' in data) || (data.employeeId is string && data.employeeId.size() <= 64))
+        && (!('jobTitle' in data) || (data.jobTitle is string && data.jobTitle.size() <= 160))
+        && (!('department' in data) || (data.department is string && data.department.size() <= 160))
+        && (!('workLocation' in data) || (data.workLocation is string && data.workLocation.size() <= 200))
+        && (!('address' in data) || (data.address is string && data.address.size() <= 400))
+        && (!('emergencyContact' in data) || (data.emergencyContact is string && data.emergencyContact.size() <= 200))
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 1500))
+        && (!('photoFileId' in data) || (data.photoFileId is string && data.photoFileId.size() <= 256))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCandidateDocument(data) {
+      return data.keys().hasAll(['candidateDocId', 'candidateId', 'documentType', 'fileName', 'mimeType', 'fileSize', 'fileId', 'uploadedBy', 'createdAt'])
+        && data.keys().hasOnly(['tenantId', 'candidateDocId', 'candidateId', 'organizationId', 'documentType', 'fileName', 'mimeType', 'fileSize', 'fileId', 'uploadedBy', 'createdAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.candidateDocId is string && data.candidateDocId.size() <= 128
+        && data.candidateId is string && data.candidateId.size() <= 128
+        && (!('organizationId' in data) || (data.organizationId is string && data.organizationId.size() <= 128))
+        && data.documentType in ['photo', 'iqama_copy', 'passport_copy', 'additional']
+        && data.fileName is string && data.fileName.size() <= 255
+        && data.mimeType in ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png']
+        && data.fileSize is number && data.fileSize > 0 && data.fileSize <= 5242880
+        && data.fileId is string && data.fileId.size() <= 256
+        && data.uploadedBy is string && data.uploadedBy.size() <= 128
+        && data.createdAt is timestamp;
+    }
+
+    function isValidIdentityHash(data) {
+      return data.keys().hasAll(['hashKey', 'idType', 'candidateDocId', 'candidateId', 'createdAt'])
+        && data.keys().hasOnly(['tenantId', 'hashKey', 'idType', 'candidateDocId', 'candidateId', 'createdAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && isValidId(data.hashKey)
+        && data.idType in ['iqama', 'passport']
+        && data.candidateDocId is string && data.candidateDocId.size() <= 128
+        && data.candidateId is string && data.candidateId.size() <= 64
+        && data.createdAt is timestamp;
+    }
+
+    function isValidOrganization(data) {
+      return data.keys().hasAll(['organizationId', 'nameEn', 'nameAr', 'contactPerson', 'mobile', 'email', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'organizationId', 'nameEn', 'nameAr', 'crNumber', 'vatNumber', 'contactPerson', 'contactDesignation', 'mobile', 'email', 'address', 'city', 'billingInfo', 'notes', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.organizationId is string && data.organizationId.size() >= 2 && data.organizationId.size() <= 64
+        && data.nameEn is string && data.nameEn.size() >= 2 && data.nameEn.size() <= 200
+        && data.nameAr is string && data.nameAr.size() >= 2 && data.nameAr.size() <= 200
+        && (!('crNumber' in data) || (data.crNumber is string && data.crNumber.size() <= 64))
+        && (!('vatNumber' in data) || (data.vatNumber is string && data.vatNumber.size() <= 40))
+        && data.contactPerson is string && data.contactPerson.size() <= 160
+        && (!('contactDesignation' in data) || (data.contactDesignation is string && data.contactDesignation.size() <= 120))
+        && data.mobile is string && data.mobile.size() <= 32
+        && data.email is string && data.email.size() <= 200
+        && (!('address' in data) || (data.address is string && data.address.size() <= 400))
+        && (!('city' in data) || (data.city is string && data.city.size() <= 120))
+        && (!('billingInfo' in data) || (data.billingInfo is string && data.billingInfo.size() <= 600))
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 1500))
+        && data.status in ['active', 'inactive', 'suspended']
+        && data.createdBy is string && data.createdBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOrganizationUser(data) {
+      return data.keys().hasAll(['organizationId', 'userId', 'email', 'status', 'createdAt'])
+        && data.keys().hasOnly(['tenantId', 'organizationId', 'userId', 'email', 'displayName', 'status', 'createdAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.organizationId is string && data.organizationId.size() <= 128
+        && data.userId is string && data.userId.size() <= 128
+        && data.email is string && data.email.size() <= 200
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 160))
+        && data.status in ['active', 'revoked']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidCourse(data) {
+      return data.keys().hasAll(['courseId', 'courseCode', 'titleEn', 'titleAr', 'category', 'duration', 'durationUnit', 'minAttendancePct', 'minExamScore', 'examRequired', 'practicalRequired', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'courseId', 'courseCode', 'titleEn', 'titleAr', 'descriptionEn', 'descriptionAr', 'category', 'courseType', 'duration', 'durationUnit', 'theoryHours', 'practicalHours', 'fee', 'minAttendancePct', 'minExamScore', 'examRequired', 'practicalRequired', 'validityMonths', 'prerequisites', 'imageFileId', 'supportingDocIds', 'defaultCertificateTemplateId', 'defaultCardTemplateId', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.courseId is string && data.courseId.size() <= 64
+        && data.courseCode is string && data.courseCode.size() >= 2 && data.courseCode.size() <= 40
+        && data.titleEn is string && data.titleEn.size() >= 2 && data.titleEn.size() <= 220
+        && data.titleAr is string && data.titleAr.size() >= 2 && data.titleAr.size() <= 220
+        && (!('descriptionEn' in data) || (data.descriptionEn is string && data.descriptionEn.size() <= 2000))
+        && (!('descriptionAr' in data) || (data.descriptionAr is string && data.descriptionAr.size() <= 2000))
+        && data.category is string && data.category.size() <= 120
+        && (!('courseType' in data) || data.courseType in ['theoretical', 'practical', 'blended', 'certification', 'refresher'])
+        && data.duration is number && data.duration > 0
+        && data.durationUnit in ['hours', 'days', 'weeks']
+        && (!('theoryHours' in data) || (data.theoryHours is number && data.theoryHours >= 0))
+        && (!('practicalHours' in data) || (data.practicalHours is number && data.practicalHours >= 0))
+        && (!('fee' in data) || (data.fee is number && data.fee >= 0))
+        && data.minAttendancePct is number && data.minAttendancePct >= 0 && data.minAttendancePct <= 100
+        && data.minExamScore is number && data.minExamScore >= 0 && data.minExamScore <= 100
+        && data.examRequired is bool
+        && data.practicalRequired is bool
+        && (!('validityMonths' in data) || (data.validityMonths is number && data.validityMonths >= 0))
+        && (!('prerequisites' in data) || (data.prerequisites is string && data.prerequisites.size() <= 600))
+        && (!('imageFileId' in data) || (data.imageFileId is string && data.imageFileId.size() <= 256))
+        && (!('supportingDocIds' in data) || (data.supportingDocIds is list && data.supportingDocIds.size() <= 20 && (data.supportingDocIds.size() == 0 || data.supportingDocIds[0] is string)))
+        && (!('defaultCertificateTemplateId' in data) || (data.defaultCertificateTemplateId is string && data.defaultCertificateTemplateId.size() <= 128))
+        && (!('defaultCardTemplateId' in data) || (data.defaultCardTemplateId is string && data.defaultCardTemplateId.size() <= 128))
+        && data.status in ['active', 'inactive', 'archived']
+        && data.createdBy is string && data.createdBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTrainer(data) {
+      return data.keys().hasAll(['trainerId', 'nameEn', 'nameAr', 'mobile', 'email', 'specialization', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'trainerId', 'userId', 'nameEn', 'nameAr', 'mobile', 'email', 'nationality', 'qualifications', 'certifications', 'specialization', 'experienceYears', 'employmentStatus', 'photoFileId', 'credentialFileIds', 'assignedCourseIds', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.trainerId is string && data.trainerId.size() <= 64
+        && (!('userId' in data) || (data.userId is string && data.userId.size() <= 128))
+        && data.nameEn is string && data.nameEn.size() >= 2 && data.nameEn.size() <= 200
+        && data.nameAr is string && data.nameAr.size() >= 2 && data.nameAr.size() <= 200
+        && data.mobile is string && data.mobile.size() <= 32
+        && data.email is string && data.email.size() <= 200
+        && (!('nationality' in data) || (data.nationality is string && data.nationality.size() <= 100))
+        && (!('qualifications' in data) || (data.qualifications is string && data.qualifications.size() <= 500))
+        && (!('certifications' in data) || (data.certifications is string && data.certifications.size() <= 500))
+        && data.specialization is string && data.specialization.size() <= 200
+        && (!('experienceYears' in data) || (data.experienceYears is number && data.experienceYears >= 0))
+        && (!('employmentStatus' in data) || data.employmentStatus in ['full_time', 'part_time', 'contract', 'freelance'])
+        && (!('photoFileId' in data) || (data.photoFileId is string && data.photoFileId.size() <= 256))
+        && (!('credentialFileIds' in data) || (data.credentialFileIds is list && data.credentialFileIds.size() <= 20 && (data.credentialFileIds.size() == 0 || data.credentialFileIds[0] is string)))
+        && (!('assignedCourseIds' in data) || (data.assignedCourseIds is list && data.assignedCourseIds.size() <= 50 && (data.assignedCourseIds.size() == 0 || data.assignedCourseIds[0] is string)))
+        && data.status in ['active', 'inactive', 'archived']
+        && data.createdBy is string && data.createdBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBatch(data) {
+      return data.keys().hasAll(['batchId', 'batchNumber', 'courseId', 'trainerId', 'venue', 'startDate', 'endDate', 'capacity', 'enrollmentCount', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'batchId', 'batchNumber', 'batchName', 'courseId', 'trainerId', 'trainerUserId', 'venue', 'trainingMode', 'startDate', 'endDate', 'startTime', 'endTime', 'capacity', 'minParticipants', 'enrollmentCount', 'enrollmentClosed', 'notes', 'cancellationReason', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.batchId is string && data.batchId.size() <= 64
+        && data.batchNumber is string && data.batchNumber.size() <= 64
+        && (!('batchName' in data) || (data.batchName is string && data.batchName.size() <= 200))
+        && data.courseId is string && data.courseId.size() <= 128
+        && data.trainerId is string && data.trainerId.size() <= 128
+        && (!('trainerUserId' in data) || (data.trainerUserId is string && data.trainerUserId.size() <= 128))
+        && data.venue is string && data.venue.size() <= 200
+        && (!('trainingMode' in data) || data.trainingMode in ['classroom', 'practical', 'online', 'hybrid'])
+        && data.startDate is string && data.startDate.size() <= 32
+        && data.endDate is string && data.endDate.size() <= 32
+        && (!('startTime' in data) || (data.startTime is string && data.startTime.size() <= 16))
+        && (!('endTime' in data) || (data.endTime is string && data.endTime.size() <= 16))
+        && data.capacity is number && data.capacity >= 1 && data.capacity <= 500
+        && (!('minParticipants' in data) || (data.minParticipants is number && data.minParticipants >= 0 && data.minParticipants <= data.capacity))
+        && data.enrollmentCount is number && data.enrollmentCount >= 0 && data.enrollmentCount <= 1000
+        && (!('enrollmentClosed' in data) || data.enrollmentClosed is bool)
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 1000))
+        && (!('cancellationReason' in data) || (data.cancellationReason is string && data.cancellationReason.size() <= 500))
+        && data.status in ['scheduled', 'in_progress', 'completed', 'cancelled']
+        && data.createdBy is string && data.createdBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidEnrollment(data) {
+      return data.keys().hasAll(['enrollmentNumber', 'candidateDocId', 'candidateId', 'courseId', 'batchId', 'status', 'requestedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'enrollmentNumber', 'candidateDocId', 'candidateId', 'candidateUserId', 'organizationId', 'courseId', 'batchId', 'trainerId', 'trainerUserId', 'status', 'trainerRecommended', 'trainerRecommendedBy', 'completionApproved', 'completionApprovedBy', 'trainingCardId', 'certificateId', 'capacityOverride', 'capacityOverrideReason', 'capacityOverrideBy', 'prerequisiteConfirmed', 'notes', 'requestedBy', 'createdAt', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.enrollmentNumber is string && data.enrollmentNumber.size() <= 64
+        && data.candidateDocId is string && data.candidateDocId.size() <= 128
+        && data.candidateId is string && data.candidateId.size() <= 64
+        && (!('candidateUserId' in data) || (data.candidateUserId is string && data.candidateUserId.size() <= 128))
+        && (!('organizationId' in data) || (data.organizationId is string && data.organizationId.size() <= 128))
+        && data.courseId is string && data.courseId.size() <= 128
+        && data.batchId is string && data.batchId.size() <= 128
+        && (!('trainerId' in data) || (data.trainerId is string && data.trainerId.size() <= 128))
+        && (!('trainerUserId' in data) || (data.trainerUserId is string && data.trainerUserId.size() <= 128))
+        && data.status in ['pending', 'confirmed', 'in_progress', 'completed', 'failed', 'cancelled', 'withdrawn']
+        && (!('trainerRecommended' in data) || data.trainerRecommended is bool)
+        && (!('trainerRecommendedBy' in data) || (data.trainerRecommendedBy is string && data.trainerRecommendedBy.size() <= 128))
+        && (!('completionApproved' in data) || data.completionApproved is bool)
+        && (!('completionApprovedBy' in data) || (data.completionApprovedBy is string && data.completionApprovedBy.size() <= 128))
+        && (!('trainingCardId' in data) || (data.trainingCardId is string && data.trainingCardId.size() <= 128))
+        && (!('certificateId' in data) || (data.certificateId is string && data.certificateId.size() <= 128))
+        && (!('capacityOverride' in data) || data.capacityOverride is bool)
+        && (!('capacityOverrideReason' in data) || (data.capacityOverrideReason is string && data.capacityOverrideReason.size() <= 500))
+        && (!('capacityOverrideBy' in data) || (data.capacityOverrideBy is string && data.capacityOverrideBy.size() <= 128))
+        && (!('prerequisiteConfirmed' in data) || data.prerequisiteConfirmed is bool)
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 500))
+        && data.requestedBy is string && data.requestedBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidEnrollmentRequest(data) {
+      return data.keys().hasAll(['requestNumber', 'organizationId', 'candidateDocIds', 'courseId', 'status', 'requestedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'requestNumber', 'organizationId', 'organizationNameEn', 'organizationNameAr', 'candidateDocIds', 'courseId', 'preferredBatchId', 'assignedBatchId', 'requestNotes', 'missingInfoNotes', 'corporateResponseNotes', 'decisionReason', 'status', 'requestedBy', 'requestedByName', 'reviewedBy', 'reviewedByName', 'decisionDate', 'createdEnrollmentIds', 'createdAt', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.requestNumber is string && data.requestNumber.size() <= 64
+        && data.organizationId is string && data.organizationId.size() <= 128
+        && (!('organizationNameEn' in data) || (data.organizationNameEn is string && data.organizationNameEn.size() <= 200))
+        && (!('organizationNameAr' in data) || (data.organizationNameAr is string && data.organizationNameAr.size() <= 200))
+        && data.candidateDocIds is list && data.candidateDocIds.size() >= 1 && data.candidateDocIds.size() <= 100 && data.candidateDocIds[0] is string
+        && data.courseId is string && data.courseId.size() <= 128
+        && (!('preferredBatchId' in data) || (data.preferredBatchId is string && data.preferredBatchId.size() <= 128))
+        && (!('assignedBatchId' in data) || (data.assignedBatchId is string && data.assignedBatchId.size() <= 128))
+        && (!('requestNotes' in data) || (data.requestNotes is string && data.requestNotes.size() <= 1000))
+        && (!('missingInfoNotes' in data) || (data.missingInfoNotes is string && data.missingInfoNotes.size() <= 1000))
+        && (!('corporateResponseNotes' in data) || (data.corporateResponseNotes is string && data.corporateResponseNotes.size() <= 1000))
+        && (!('decisionReason' in data) || (data.decisionReason is string && data.decisionReason.size() <= 1000))
+        && data.status in ['pending_review', 'info_requested', 'approved', 'rejected']
+        && data.requestedBy is string && data.requestedBy.size() <= 128
+        && (!('requestedByName' in data) || (data.requestedByName is string && data.requestedByName.size() <= 160))
+        && (!('reviewedBy' in data) || (data.reviewedBy is string && data.reviewedBy.size() <= 128))
+        && (!('reviewedByName' in data) || (data.reviewedByName is string && data.reviewedByName.size() <= 160))
+        && (!('decisionDate' in data) || (data.decisionDate is string && data.decisionDate.size() <= 32))
+        && (!('createdEnrollmentIds' in data) || (data.createdEnrollmentIds is list && data.createdEnrollmentIds.size() <= 100 && (data.createdEnrollmentIds.size() == 0 || data.createdEnrollmentIds[0] is string)))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAttendance(data) {
+      return data.keys().hasAll(['batchId', 'enrollmentId', 'candidateDocId', 'date', 'status', 'markedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'batchId', 'enrollmentId', 'candidateDocId', 'organizationId', 'trainerUserId', 'date', 'status', 'remarks', 'markedBy', 'submissionStatus', 'submittedAt', 'submittedBy', 'correctedBy', 'correctionReason', 'createdAt', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.batchId is string && data.batchId.size() <= 128
+        && data.enrollmentId is string && data.enrollmentId.size() <= 128
+        && data.candidateDocId is string && data.candidateDocId.size() <= 128
+        && (!('organizationId' in data) || (data.organizationId is string && data.organizationId.size() <= 128))
+        && (!('trainerUserId' in data) || (data.trainerUserId is string && data.trainerUserId.size() <= 128))
+        && data.date is string && data.date.size() <= 32
+        && data.status in ['present', 'absent', 'late', 'excused']
+        && (!('remarks' in data) || (data.remarks is string && data.remarks.size() <= 400))
+        && data.markedBy is string && data.markedBy.size() <= 128
+        && (!('submissionStatus' in data) || data.submissionStatus in ['draft', 'submitted'])
+        && (!('submittedAt' in data) || (data.submittedAt is string && data.submittedAt.size() <= 40))
+        && (!('submittedBy' in data) || (data.submittedBy is string && data.submittedBy.size() <= 128))
+        && (!('correctedBy' in data) || (data.correctedBy is string && data.correctedBy.size() <= 128))
+        && (!('correctionReason' in data) || (data.correctionReason is string && data.correctionReason.size() <= 500))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAssessment(data) {
+      return data.keys().hasAll(['enrollmentId', 'candidateDocId', 'courseId', 'batchId', 'assessmentType', 'attemptNumber', 'maxMarks', 'obtainedMarks', 'passingScore', 'result', 'assessorId', 'assessmentDate', 'createdAt'])
+        && data.keys().hasOnly(['tenantId', 'assessmentNumber', 'enrollmentId', 'candidateDocId', 'organizationId', 'courseId', 'batchId', 'trainerUserId', 'assessmentType', 'attemptNumber', 'maxMarks', 'obtainedMarks', 'percentage', 'passingScore', 'result', 'remarks', 'assessorId', 'assessorName', 'assessmentDate', 'assessmentStatus', 'correctionReason', 'correctedMarks', 'correctedResult', 'correctionRequestedBy', 'approvedBy', 'createdAt', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && (!('assessmentNumber' in data) || (data.assessmentNumber is string && data.assessmentNumber.size() <= 64))
+        && data.enrollmentId is string && data.enrollmentId.size() <= 128
+        && data.candidateDocId is string && data.candidateDocId.size() <= 128
+        && (!('organizationId' in data) || (data.organizationId is string && data.organizationId.size() <= 128))
+        && data.courseId is string && data.courseId.size() <= 128
+        && data.batchId is string && data.batchId.size() <= 128
+        && (!('trainerUserId' in data) || (data.trainerUserId is string && data.trainerUserId.size() <= 128))
+        && data.assessmentType in ['written', 'practical', 'oral', 'trainer_eval', 'pass_fail']
+        && data.attemptNumber is number && data.attemptNumber >= 1
+        && data.maxMarks is number && data.maxMarks >= 1
+        && data.obtainedMarks is number && data.obtainedMarks >= 0 && data.obtainedMarks <= data.maxMarks
+        && (!('percentage' in data) || (data.percentage is number && data.percentage >= 0 && data.percentage <= 100))
+        && data.passingScore is number && data.passingScore >= 0
+        && data.result in ['pass', 'fail']
+        && (!('remarks' in data) || (data.remarks is string && data.remarks.size() <= 500))
+        && data.assessorId is string && data.assessorId.size() <= 128
+        && (!('assessorName' in data) || (data.assessorName is string && data.assessorName.size() <= 160))
+        && data.assessmentDate is string && data.assessmentDate.size() <= 32
+        && (!('assessmentStatus' in data) || data.assessmentStatus in ['recorded', 'pending_correction', 'approved'])
+        && (!('correctionReason' in data) || (data.correctionReason is string && data.correctionReason.size() <= 500))
+        && (!('correctedMarks' in data) || (data.correctedMarks is number && data.correctedMarks >= 0))
+        && (!('correctedResult' in data) || data.correctedResult in ['pass', 'fail'])
+        && (!('correctionRequestedBy' in data) || (data.correctionRequestedBy is string && data.correctionRequestedBy.size() <= 128))
+        && (!('approvedBy' in data) || (data.approvedBy is string && data.approvedBy.size() <= 128))
+        && data.createdAt is timestamp
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidTrainingCard(data) {
+      return data.keys().hasAll(['cardSerialNumber', 'enrollmentId', 'candidateDocId', 'candidateId', 'courseId', 'batchId', 'qrTokenHash', 'pdfFileId', 'version', 'status', 'generatedBy', 'createdAt'])
+        && data.keys().hasOnly(['tenantId', 'cardSerialNumber', 'enrollmentId', 'candidateDocId', 'candidateId', 'candidateUserId', 'organizationId', 'courseId', 'batchId', 'templateId', 'templateName', 'templateVersion', 'qrTokenHash', 'pdfFileId', 'version', 'status', 'snapshot', 'generatedBy', 'createdAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.cardSerialNumber is string && data.cardSerialNumber.size() <= 64
+        && data.enrollmentId is string && data.enrollmentId.size() <= 128
+        && data.candidateDocId is string && data.candidateDocId.size() <= 128
+        && data.candidateId is string && data.candidateId.size() <= 64
+        && (!('candidateUserId' in data) || (data.candidateUserId is string && data.candidateUserId.size() <= 128))
+        && (!('organizationId' in data) || (data.organizationId is string && data.organizationId.size() <= 128))
+        && data.courseId is string && data.courseId.size() <= 128
+        && data.batchId is string && data.batchId.size() <= 128
+        && (!('templateId' in data) || (data.templateId is string && data.templateId.size() <= 128))
+        && (!('templateName' in data) || (data.templateName is string && data.templateName.size() <= 160))
+        && (!('templateVersion' in data) || (data.templateVersion is number && data.templateVersion >= 1))
+        && data.qrTokenHash is string && data.qrTokenHash.size() <= 128
+        && data.pdfFileId is string && data.pdfFileId.size() <= 256
+        && data.version is number && data.version >= 1
+        && data.status in ['active', 'superseded', 'revoked']
+        && (!('snapshot' in data) || data.snapshot is map)
+        && data.generatedBy is string && data.generatedBy.size() <= 128
+        && data.createdAt is timestamp;
+    }
+
+    function isValidCertificate(data) {
+      return data.keys().hasAll(['certificateNumber', 'enrollmentId', 'candidateDocId', 'candidateId', 'courseId', 'batchId', 'tokenHash', 'pdfFileId', 'issueDate', 'completionDate', 'status', 'issuedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'certificateNumber', 'enrollmentId', 'candidateDocId', 'candidateId', 'candidateUserId', 'organizationId', 'courseId', 'batchId', 'templateId', 'templateVersion', 'tokenHash', 'pdfFileId', 'issueDate', 'completionDate', 'expiryDate', 'status', 'revocationReason', 'revokedBy', 'supersededBy', 'issuedBy', 'snapshot', 'createdAt', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.certificateNumber is string && data.certificateNumber.size() <= 64
+        && data.enrollmentId is string && data.enrollmentId.size() <= 128
+        && data.candidateDocId is string && data.candidateDocId.size() <= 128
+        && data.candidateId is string && data.candidateId.size() <= 64
+        && (!('candidateUserId' in data) || (data.candidateUserId is string && data.candidateUserId.size() <= 128))
+        && (!('organizationId' in data) || (data.organizationId is string && data.organizationId.size() <= 128))
+        && data.courseId is string && data.courseId.size() <= 128
+        && data.batchId is string && data.batchId.size() <= 128
+        && (!('templateId' in data) || (data.templateId is string && data.templateId.size() <= 128))
+        && (!('templateVersion' in data) || data.templateVersion is number)
+        && data.tokenHash is string && data.tokenHash.size() <= 128
+        && data.pdfFileId is string && data.pdfFileId.size() <= 256
+        && data.issueDate is string && data.issueDate.size() <= 32
+        && data.completionDate is string && data.completionDate.size() <= 32
+        && (!('expiryDate' in data) || (data.expiryDate is string && data.expiryDate.size() <= 32))
+        && data.status in ['valid', 'expired', 'revoked', 'superseded']
+        && (!('revocationReason' in data) || (data.revocationReason is string && data.revocationReason.size() <= 500))
+        && (!('revokedBy' in data) || (data.revokedBy is string && data.revokedBy.size() <= 128))
+        && (!('supersededBy' in data) || (data.supersededBy is string && data.supersededBy.size() <= 64))
+        && data.issuedBy is string && data.issuedBy.size() <= 128
+        && (!('snapshot' in data) || data.snapshot is map)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPublicVerification(data) {
+      return data.keys().hasAll(['lookupKey', 'certificateNumber', 'candidateNameEn', 'courseTitleEn', 'completionDate', 'issueDate', 'issuingCenterEn', 'status', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'lookupKey', 'certificateNumber', 'candidateNameEn', 'candidateNameAr', 'courseTitleEn', 'courseTitleAr', 'completionDate', 'issueDate', 'expiryDate', 'issuingCenterEn', 'issuingCenterAr', 'status', 'supersededBy', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.lookupKey is string && data.lookupKey.size() <= 128
+        && data.certificateNumber is string && data.certificateNumber.size() <= 64
+        && data.candidateNameEn is string && data.candidateNameEn.size() <= 200
+        && (!('candidateNameAr' in data) || (data.candidateNameAr is string && data.candidateNameAr.size() <= 200))
+        && data.courseTitleEn is string && data.courseTitleEn.size() <= 220
+        && (!('courseTitleAr' in data) || (data.courseTitleAr is string && data.courseTitleAr.size() <= 220))
+        && data.completionDate is string && data.completionDate.size() <= 32
+        && data.issueDate is string && data.issueDate.size() <= 32
+        && (!('expiryDate' in data) || (data.expiryDate is string && data.expiryDate.size() <= 32))
+        && data.issuingCenterEn is string && data.issuingCenterEn.size() <= 200
+        && (!('issuingCenterAr' in data) || (data.issuingCenterAr is string && data.issuingCenterAr.size() <= 200))
+        && data.status in ['valid', 'expired', 'revoked', 'superseded']
+        && (!('supersededBy' in data) || (data.supersededBy is string && data.supersededBy.size() <= 64))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTemplate(data) {
+      return data.keys().hasAll(['name', 'scope', 'version', 'isDefault', 'config', 'updatedBy', 'createdAt', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 160
+        && data.scope in ['common', 'course']
+        && (!('courseId' in data) || (data.courseId is string && data.courseId.size() <= 128))
+        && (!('languageMode' in data) || data.languageMode in ['bilingual', 'en', 'ar'])
+        && (!('isActive' in data) || data.isActive is bool)
+        && data.version is number && data.version >= 1
+        && data.isDefault is bool
+        && data.config is map
+        && data.updatedBy is string && data.updatedBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCompanySettings(data) {
+      return data.keys().hasAll(['nameEn', 'nameAr', 'primaryColor', 'secondaryColor', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'nameEn', 'nameAr', 'legalName', 'crNumber', 'address', 'phone', 'email', 'website', 'logoFileId', 'stampFileId', 'signatoryName', 'signatureFileId', 'primaryColor', 'secondaryColor', 'certificateFooter', 'cardFooter', 'updatedBy', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.nameEn is string && data.nameEn.size() <= 200
+        && data.nameAr is string && data.nameAr.size() <= 200
+        && (!('legalName' in data) || (data.legalName is string && data.legalName.size() <= 240))
+        && (!('crNumber' in data) || (data.crNumber is string && data.crNumber.size() <= 64))
+        && (!('address' in data) || (data.address is string && data.address.size() <= 400))
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 40))
+        && (!('email' in data) || (data.email is string && data.email.size() <= 200))
+        && (!('website' in data) || (data.website is string && data.website.size() <= 200))
+        && (!('logoFileId' in data) || (data.logoFileId is string && data.logoFileId.size() <= 256))
+        && (!('stampFileId' in data) || (data.stampFileId is string && data.stampFileId.size() <= 256))
+        && (!('signatoryName' in data) || (data.signatoryName is string && data.signatoryName.size() <= 160))
+        && (!('signatureFileId' in data) || (data.signatureFileId is string && data.signatureFileId.size() <= 256))
+        && data.primaryColor is string && data.primaryColor.size() <= 16
+        && data.secondaryColor is string && data.secondaryColor.size() <= 16
+        && (!('certificateFooter' in data) || (data.certificateFooter is string && data.certificateFooter.size() <= 400))
+        && (!('cardFooter' in data) || (data.cardFooter is string && data.cardFooter.size() <= 400))
+        && data.updatedBy is string && data.updatedBy.size() <= 128
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['type', 'titleEn', 'titleAr', 'bodyEn', 'bodyAr', 'read', 'createdAt'])
+        && data.keys().hasOnly(['tenantId', 'targetUserId', 'targetRole', 'organizationId', 'type', 'category', 'channel', 'deliveryStatus', 'recipient', 'candidateDocId', 'candidateId', 'enrollmentId', 'trainingCardId', 'certificateId', 'attachmentFileId', 'titleEn', 'titleAr', 'bodyEn', 'bodyAr', 'read', 'createdAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && (!('targetUserId' in data) || (data.targetUserId is string && data.targetUserId.size() <= 128))
+        && (!('targetRole' in data) || (data.targetRole is string && data.targetRole.size() <= 64))
+        && (!('organizationId' in data) || (data.organizationId is string && data.organizationId.size() <= 128))
+        && data.type is string && data.type.size() <= 64
+        && (!('category' in data) || (data.category is string && data.category.size() <= 64))
+        && (!('channel' in data) || data.channel in ['in_app', 'email', 'whatsapp', 'whatsapp_manual'])
+        && (!('deliveryStatus' in data) || data.deliveryStatus in ['pending', 'queued', 'sent', 'delivered', 'failed', 'retry_required', 'manual_initiated'])
+        && (!('recipient' in data) || (data.recipient is string && data.recipient.size() <= 200))
+        && (!('candidateDocId' in data) || (data.candidateDocId is string && data.candidateDocId.size() <= 128))
+        && (!('candidateId' in data) || (data.candidateId is string && data.candidateId.size() <= 64))
+        && (!('enrollmentId' in data) || (data.enrollmentId is string && data.enrollmentId.size() <= 128))
+        && (!('trainingCardId' in data) || (data.trainingCardId is string && data.trainingCardId.size() <= 128))
+        && (!('certificateId' in data) || (data.certificateId is string && data.certificateId.size() <= 128))
+        && (!('attachmentFileId' in data) || (data.attachmentFileId is string && data.attachmentFileId.size() <= 256))
+        && data.titleEn is string && data.titleEn.size() <= 200
+        && data.titleAr is string && data.titleAr.size() <= 200
+        && data.bodyEn is string && data.bodyEn.size() <= 1000
+        && data.bodyAr is string && data.bodyAr.size() <= 1000
+        && data.read is bool
+        && data.createdAt is timestamp;
+    }
+
+    function isValidMessageTemplate(data) {
+      return data.keys().hasAll(['code', 'category', 'nameEn', 'nameAr', 'subjectEn', 'subjectAr', 'bodyEn', 'bodyAr', 'isActive', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'code', 'category', 'nameEn', 'nameAr', 'subjectEn', 'subjectAr', 'bodyEn', 'bodyAr', 'whatsappTemplateName', 'whatsappLanguageEn', 'whatsappLanguageAr', 'useApprovedMetaTemplate', 'placeholders', 'isActive', 'updatedBy', 'createdAt', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.code is string && data.code.size() >= 2 && data.code.size() <= 80
+        && data.category in ['candidate_registration', 'enrollment_confirmation', 'training_schedule', 'training_reminder', 'training_card_delivery', 'attendance_notification', 'examination_schedule', 'examination_result', 'certificate_issuance', 'certificate_pdf_delivery', 'certificate_expiry_reminder']
+        && data.nameEn is string && data.nameEn.size() >= 2 && data.nameEn.size() <= 200
+        && data.nameAr is string && data.nameAr.size() >= 2 && data.nameAr.size() <= 200
+        && data.subjectEn is string && data.subjectEn.size() <= 240
+        && data.subjectAr is string && data.subjectAr.size() <= 240
+        && data.bodyEn is string && data.bodyEn.size() <= 3000
+        && data.bodyAr is string && data.bodyAr.size() <= 3000
+        && (!('whatsappTemplateName' in data) || (data.whatsappTemplateName is string && data.whatsappTemplateName.size() <= 160))
+        && (!('whatsappLanguageEn' in data) || (data.whatsappLanguageEn is string && data.whatsappLanguageEn.size() <= 24))
+        && (!('whatsappLanguageAr' in data) || (data.whatsappLanguageAr is string && data.whatsappLanguageAr.size() <= 24))
+        && (!('useApprovedMetaTemplate' in data) || data.useApprovedMetaTemplate is bool)
+        && (!('placeholders' in data) || (data.placeholders is list && data.placeholders.size() <= 30 && (data.placeholders.size() == 0 || data.placeholders[0] is string)))
+        && data.isActive is bool
+        && data.updatedBy is string && data.updatedBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidImportJob(data) {
+      return data.keys().hasAll(['jobId', 'importType', 'fileName', 'totalRows', 'importedCount', 'duplicateCount', 'invalidCount', 'skippedCount', 'failedCount', 'status', 'createdBy', 'createdAt'])
+        && data.keys().hasOnly(['tenantId', 'jobId', 'importType', 'organizationId', 'fileName', 'uploadedByName', 'uploadedByEmail', 'totalRows', 'importedCount', 'updatedCount', 'duplicateCount', 'invalidCount', 'skippedCount', 'failedCount', 'status', 'createdBy', 'createdAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.jobId is string && data.jobId.size() >= 3 && data.jobId.size() <= 64
+        && data.importType in ['candidates', 'corporate_employees', 'enrollment_requests', 'enrollments', 'attendance', 'courses', 'trainers']
+        && (!('organizationId' in data) || (data.organizationId is string && data.organizationId.size() <= 128))
+        && data.fileName is string && data.fileName.size() <= 255
+        && (!('uploadedByName' in data) || (data.uploadedByName is string && data.uploadedByName.size() <= 160))
+        && (!('uploadedByEmail' in data) || (data.uploadedByEmail is string && data.uploadedByEmail.size() <= 200))
+        && data.totalRows is number && data.totalRows >= 0
+        && data.importedCount is number && data.importedCount >= 0
+        && (!('updatedCount' in data) || (data.updatedCount is number && data.updatedCount >= 0))
+        && data.duplicateCount is number && data.duplicateCount >= 0
+        && data.invalidCount is number && data.invalidCount >= 0
+        && data.skippedCount is number && data.skippedCount >= 0
+        && data.failedCount is number && data.failedCount >= 0
+        && data.status in ['completed', 'completed_with_errors', 'failed', 'cancelled']
+        && data.createdBy is string && data.createdBy.size() <= 128
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['actorUid', 'actorRole', 'action', 'entityType', 'entityId', 'createdAt'])
+        && data.keys().hasOnly(['tenantId', 'actorUid', 'actorEmail', 'actorRole', 'action', 'entityType', 'entityId', 'details', 'createdAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.actorUid is string && data.actorUid.size() <= 128
+        && (!('actorEmail' in data) || (data.actorEmail is string && data.actorEmail.size() <= 200))
+        && data.actorRole is string && data.actorRole.size() <= 64
+        && data.action is string && data.action.size() <= 120
+        && data.entityType is string && data.entityType.size() <= 80
+        && data.entityId is string && data.entityId.size() <= 128
+        && (!('details' in data) || (data.details is string && data.details.size() <= 2000))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidVerificationLog(data) {
+      return data.keys().hasAll(['mode', 'query', 'resultStatus', 'createdAt'])
+        && data.keys().hasOnly(['tenantId', 'mode', 'query', 'resultStatus', 'certificateNumber', 'actorUid', 'createdAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.mode in ['public', 'internal']
+        && data.query is string && data.query.size() <= 200
+        && data.resultStatus is string && data.resultStatus.size() <= 64
+        && (!('certificateNumber' in data) || (data.certificateNumber is string && data.certificateNumber.size() <= 64))
+        && (!('actorUid' in data) || (data.actorUid is string && data.actorUid.size() <= 128))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidDeliveryLog(data) {
+      return data.keys().hasAll(['channel', 'recipient', 'messageType', 'deliveryStatus', 'sentBy', 'createdAt'])
+        && data.keys().hasOnly(['tenantId', 'channel', 'recipient', 'recipientName', 'messageType', 'category', 'templateId', 'language', 'titleEn', 'titleAr', 'messagePreview', 'providerMessageId', 'deliveryStatus', 'failureReason', 'providerStatusDetails', 'entityId', 'candidateDocId', 'candidateId', 'enrollmentId', 'trainingCardId', 'certificateId', 'organizationId', 'attachmentFileId', 'manualUrl', 'retryCount', 'lastRetryAt', 'deliveredAt', 'sentBy', 'createdAt', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.channel in ['in_app', 'email', 'whatsapp', 'whatsapp_manual']
+        && data.recipient is string && data.recipient.size() <= 200
+        && (!('recipientName' in data) || (data.recipientName is string && data.recipientName.size() <= 200))
+        && data.messageType is string && data.messageType.size() <= 80
+        && (!('category' in data) || (data.category is string && data.category.size() <= 80))
+        && (!('templateId' in data) || (data.templateId is string && data.templateId.size() <= 128))
+        && (!('language' in data) || data.language in ['en', 'ar', 'bilingual'])
+        && (!('titleEn' in data) || (data.titleEn is string && data.titleEn.size() <= 240))
+        && (!('titleAr' in data) || (data.titleAr is string && data.titleAr.size() <= 240))
+        && (!('messagePreview' in data) || (data.messagePreview is string && data.messagePreview.size() <= 2000))
+        && (!('providerMessageId' in data) || (data.providerMessageId is string && data.providerMessageId.size() <= 200))
+        && data.deliveryStatus in ['pending', 'queued', 'sent', 'delivered', 'failed', 'retry_required', 'manual_initiated']
+        && (!('failureReason' in data) || (data.failureReason is string && data.failureReason.size() <= 500))
+        && (!('providerStatusDetails' in data) || (data.providerStatusDetails is string && data.providerStatusDetails.size() <= 500))
+        && (!('entityId' in data) || (data.entityId is string && data.entityId.size() <= 128))
+        && (!('candidateDocId' in data) || (data.candidateDocId is string && data.candidateDocId.size() <= 128))
+        && (!('candidateId' in data) || (data.candidateId is string && data.candidateId.size() <= 64))
+        && (!('enrollmentId' in data) || (data.enrollmentId is string && data.enrollmentId.size() <= 128))
+        && (!('trainingCardId' in data) || (data.trainingCardId is string && data.trainingCardId.size() <= 128))
+        && (!('certificateId' in data) || (data.certificateId is string && data.certificateId.size() <= 128))
+        && (!('organizationId' in data) || (data.organizationId is string && data.organizationId.size() <= 128))
+        && (!('attachmentFileId' in data) || (data.attachmentFileId is string && data.attachmentFileId.size() <= 256))
+        && (!('manualUrl' in data) || (data.manualUrl is string && data.manualUrl.size() <= 2000))
+        && (!('retryCount' in data) || (data.retryCount is number && data.retryCount >= 0 && data.retryCount <= 100))
+        && (!('lastRetryAt' in data) || (data.lastRetryAt is string && data.lastRetryAt.size() <= 40))
+        && (!('deliveredAt' in data) || (data.deliveredAt is string && data.deliveredAt.size() <= 40))
+        && data.sentBy is string && data.sentBy.size() <= 128
+        && data.createdAt is timestamp
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidSystemSettings(data) {
+      return data.keys().hasAll(['key', 'config', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'key', 'config', 'updatedBy', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.key is string && data.key.size() <= 64
+        && data.config is map
+        && data.updatedBy is string && data.updatedBy.size() <= 128
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCounter(data) {
+      return data.keys().hasAll(['prefix', 'value', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'prefix', 'value', 'updatedAt'])
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.prefix is string && data.prefix.size() <= 32
+        && data.value is number && data.value >= 0
+        && data.updatedAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // SaaS Platform Collection Rules
+    // -------------------------------------------------------------------------
+    match /test/connection {
+      allow get: if true;
+    }
+
+    match /saasTenants/{tenantId} {
+      allow get: if isValidId(tenantId) && isVerified() && (
+        isPlatformSuperAdmin() ||
+        tenantId == 'tenant_default' ||
+        hasTenantMembership(tenantId) ||
+        userTenantId() == tenantId ||
+        hasPendingInviteForTenant(tenantId) ||
+        ownsActiveRegisteredTenant(tenantId)
+      );
+      allow list: if isVerified() && (
+        isPlatformSuperAdmin() ||
+        existing().tenantId == userTenantId() ||
+        hasTenantMembership(existing().tenantId) ||
+        ('ownerUserId' in existing() && existing().ownerUserId == request.auth.uid)
+      );
+      allow create: if isValidId(tenantId) && isVerified() && isValidSaasTenant(incoming())
+        && isValidTimestamp(incoming().createdAt)
+        && isValidTimestamp(incoming().updatedAt)
+        && (
+          isPlatformSuperAdmin() ||
+          (
+            tenantId == 'tenant_default' &&
+            incoming().tenantId == 'tenant_default' &&
+            incoming().isDefaultLegacyTenant == true &&
+            incoming().status == 'active'
+          ) ||
+          (
+            hasPendingTenantRegistration(tenantId) &&
+            incoming().tenantId == tenantId &&
+            incoming().ownerUserId == request.auth.uid &&
+            incoming().createdBy == request.auth.uid &&
+            incoming().isDefaultLegacyTenant == false &&
+            incoming().status in ['trial', 'active']
+          )
+        );
+      allow update: if isValidId(tenantId) && isVerified() && isValidSaasTenant(incoming())
+        && isValidTimestamp(incoming().updatedAt)
+        && incoming().createdAt == existing().createdAt
+        && incoming().tenantId == existing().tenantId
+        && (
+          isPlatformSuperAdmin() ||
+          (
+            hasTenantMembership(tenantId) &&
+            tenantMembershipRole(tenantId) in ['super_admin', 'tenant_owner'] &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['nameEn', 'nameAr', 'legalName', 'contactEmail', 'contactPhone', 'country', 'defaultLanguage', 'timezone', 'onboardingCompleted', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(tenantId) && isPlatformSuperAdmin() && tenantId != 'tenant_default';
+    }
+
+    match /saasUsers/{userId} {
+      allow get: if isValidId(userId) && isVerified() && (request.auth.uid == userId || isPlatformSuperAdmin());
+      allow list: if isVerified() && (isPlatformSuperAdmin() || existing().uid == request.auth.uid);
+      allow create: if isValidId(userId) && isVerified() && isValidSaasUser(incoming())
+        && isValidTimestamp(incoming().createdAt)
+        && isValidTimestamp(incoming().updatedAt)
+        && (
+          (
+            request.auth.uid == userId &&
+            incoming().uid == request.auth.uid &&
+            incoming().email.lower() == tokenEmailLower() &&
+            incoming().status == 'active' &&
+            (
+              !('platformRole' in incoming()) ||
+              (isBootstrappedSuperAdmin() && incoming().platformRole == 'platform_super_admin')
+            )
+          ) ||
+          isPlatformSuperAdmin()
+        );
+      allow update: if isValidId(userId) && isVerified() && isValidSaasUser(incoming())
+        && isValidTimestamp(incoming().updatedAt)
+        && incoming().createdAt == existing().createdAt
+        && incoming().uid == existing().uid
+        && (
+          isPlatformSuperAdmin() ||
+          (
+            request.auth.uid == userId &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'preferredLanguage', 'defaultTenantId', 'updatedAt']) &&
+            (!incoming().diff(existing()).affectedKeys().hasAny(['defaultTenantId']) || ('defaultTenantId' in incoming() && (hasTenantMembership(incoming().defaultTenantId) || hasPendingInviteForTenant(incoming().defaultTenantId) || ownsActiveRegisteredTenant(incoming().defaultTenantId)))) &&
+            incoming().status == existing().status
+          )
+        );
+      allow delete: if isValidId(userId) && isPlatformSuperAdmin() && userId != request.auth.uid;
+    }
+
+    match /tenantMemberships/{membershipId} {
+      allow get: if isValidId(membershipId) && isVerified() && (
+        (resource == null && (isAdmin() || membershipId.matches('^.+__' + request.auth.uid + '$'))) ||
+        (resource != null && (existing().uid == request.auth.uid || (isAdmin() && docMatchesTenant(existing()))))
+      );
+      allow list: if isVerified() && (
+        existing().uid == request.auth.uid ||
+        (isAdmin() && docMatchesTenant(existing()))
+      );
+      allow create: if isValidId(membershipId) && isVerified() && isValidTenantMembership(incoming())
+        && isValidTimestamp(incoming().createdAt)
+        && isValidTimestamp(incoming().updatedAt)
+        && (
+          (
+            !isPlatformSuperAdmin() &&
+            incoming().uid == request.auth.uid &&
+            incoming().email.lower() == tokenEmailLower() &&
+            incoming().status == 'active' &&
+            (
+              incoming().role == 'candidate' ||
+              hasPendingInviteForEmail(incoming().tenantId, incoming().role) ||
+              (ownsActiveRegisteredTenant(incoming().tenantId) && incoming().role == 'tenant_owner')
+            )
+          ) ||
+          (
+            isPlatformSuperAdmin() &&
+            incoming().uid != request.auth.uid &&
+            incoming().role == 'tenant_owner'
+          ) ||
+          (
+            isSuperAdmin() &&
+            incomingMatchesTenant(incoming())
+          ) ||
+          (
+            isAdmin() &&
+            incomingMatchesTenant(incoming()) &&
+            incoming().role in ['certificate_officer', 'trainer', 'corporate_client', 'candidate']
+          )
+        );
+      allow update: if isValidId(membershipId) && isVerified() && isValidTenantMembership(incoming())
+        && isValidTimestamp(incoming().updatedAt)
+        && incoming().createdAt == existing().createdAt
+        && incoming().tenantId == existing().tenantId
+        && incoming().uid == existing().uid
+        && (
+          (isSuperAdmin() && docMatchesTenant(existing())) ||
+          (
+            isAdmin() &&
+            docMatchesTenant(existing()) &&
+            existing().role in ['certificate_officer', 'trainer', 'corporate_client', 'candidate'] &&
+            incoming().role in ['certificate_officer', 'trainer', 'corporate_client', 'candidate']
+          ) ||
+          (
+            !isPlatformSuperAdmin() &&
+            existing().uid == request.auth.uid &&
+            existing().role == 'candidate' &&
+            existing().tenantId == 'tenant_default' &&
+            incoming().status == 'active' &&
+            hasPendingInviteForEmail(existing().tenantId, incoming().role) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'organizationId', 'trainerId', 'candidateId', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(membershipId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /platformSettings/{settingId} {
+      allow get: if isValidId(settingId) && (settingId == 'public_config' || isPlatformSuperAdmin());
+      allow list: if isPlatformSuperAdmin();
+      allow create: if isValidId(settingId) && isPlatformSuperAdmin() && isValidPlatformSettings(incoming()) && isValidTimestamp(incoming().updatedAt);
+      allow update: if isValidId(settingId) && isPlatformSuperAdmin() && isValidPlatformSettings(incoming()) && isValidTimestamp(incoming().updatedAt);
+      allow delete: if false;
+    }
+
+    match /subscriptionPlans/{planId} {
+      allow get: if isValidId(planId) && (isPlatformSuperAdmin() || resource == null || existing().isActive == true);
+      allow list: if isPlatformSuperAdmin() || existing().isActive == true;
+      allow create: if isValidId(planId) && isPlatformSuperAdmin() && isValidSubscriptionPlan(incoming())
+        && isValidTimestamp(incoming().createdAt) && isValidTimestamp(incoming().updatedAt);
+      allow update: if isValidId(planId) && isPlatformSuperAdmin() && isValidSubscriptionPlan(incoming())
+        && isValidTimestamp(incoming().updatedAt);
+      allow delete: if isValidId(planId) && isPlatformSuperAdmin();
+    }
+
+    match /platformLeads/{leadId} {
+      allow get: if isValidId(leadId) && isPlatformSuperAdmin();
+      allow list: if isPlatformSuperAdmin();
+      allow create: if isValidId(leadId) && isValidPlatformLead(incoming())
+        && incoming().status == 'new'
+        && isValidTimestamp(incoming().createdAt)
+        && isValidTimestamp(incoming().updatedAt);
+      allow update: if isValidId(leadId) && isPlatformSuperAdmin() && isValidPlatformLead(incoming())
+        && isValidTimestamp(incoming().updatedAt)
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(leadId) && isPlatformSuperAdmin();
+    }
+
+    match /pendingTenantRegistrations/{regId} {
+      allow get: if isValidId(regId) && (isPlatformSuperAdmin() || (isSignedIn() && request.auth.uid == regId));
+      allow list: if isPlatformSuperAdmin();
+      allow create: if isValidId(regId) && isSignedIn() && request.auth.uid == regId
+        && isValidPendingTenantRegistration(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().ownerEmail.lower() == tokenEmailLower()
+        && isValidTimestamp(incoming().createdAt)
+        && isValidTimestamp(incoming().updatedAt);
+      allow update: if isValidId(regId) && isSignedIn() && (
+        isPlatformSuperAdmin() ||
+        (request.auth.uid == regId && isValidPendingTenantRegistration(incoming()) && incoming().ownerUid == request.auth.uid && incoming().ownerEmail.lower() == tokenEmailLower() && isValidTimestamp(incoming().updatedAt) && incoming().createdAt == existing().createdAt)
+      );
+      allow delete: if isValidId(regId) && (isPlatformSuperAdmin() || (isVerified() && request.auth.uid == regId));
+    }
+
+    match /platformAuditLogs/{logId} {
+      allow get: if isValidId(logId) && isPlatformSuperAdmin();
+      allow list: if isPlatformSuperAdmin();
+      allow create: if isValidId(logId) && isPlatformSuperAdmin() && isValidPlatformAuditLog(incoming())
+        && isValidTimestamp(incoming().createdAt)
+        && incoming().actorUid == request.auth.uid;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Tenant-Scoped Core & Operational Collection Rules
+    // -------------------------------------------------------------------------
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isVerified() && (
+        request.auth.uid == userId ||
+        ((isSuperAdmin() || isAdmin()) && (resource == null || docMatchesTenant(existing())))
+      );
+      allow list: if isVerified() && (
+        existing().uid == request.auth.uid ||
+        ((isSuperAdmin() || isAdmin()) && docMatchesTenant(existing()))
+      );
+      allow create: if isValidId(userId) && isVerified() && isValidUser(incoming())
+        && isValidTimestamp(incoming().createdAt)
+        && isValidTimestamp(incoming().updatedAt)
+        && (
+          (
+            request.auth.uid == userId &&
+            incoming().uid == request.auth.uid &&
+            incoming().email.lower() == tokenEmailLower() &&
+            incoming().status == 'active' &&
+            !('permissions' in incoming()) &&
+            (
+              (
+                isBootstrappedSuperAdmin() &&
+                incoming().role in ['super_admin', 'tenant_owner'] &&
+                (!('platformRole' in incoming()) || incoming().platformRole == 'platform_super_admin')
+              ) ||
+              (
+                !('platformRole' in incoming()) &&
+                (
+                  incoming().role == 'candidate' ||
+                  hasPendingInviteForEmail(('tenantId' in incoming() ? incoming().tenantId : 'tenant_default'), incoming().role) ||
+                  (ownsActiveRegisteredTenant(('tenantId' in incoming() ? incoming().tenantId : 'tenant_default')) && incoming().role == 'tenant_owner')
+                )
+              )
+            )
+          ) ||
+          (
+            isPlatformSuperAdmin() &&
+            userId != request.auth.uid &&
+            incoming().role == 'tenant_owner' &&
+            !('platformRole' in incoming())
+          ) ||
+          (
+            isSuperAdmin() &&
+            incomingMatchesTenant(incoming()) &&
+            !('platformRole' in incoming())
+          ) ||
+          (
+            isAdmin() &&
+            incomingMatchesTenant(incoming()) &&
+            incoming().role in ['certificate_officer', 'trainer', 'corporate_client', 'candidate'] &&
+            !('permissions' in incoming()) &&
+            !('platformRole' in incoming())
+          )
+        );
+      allow update: if isValidId(userId) && isVerified() && isValidUser(incoming())
+        && isValidTimestamp(incoming().updatedAt)
+        && incoming().createdAt == existing().createdAt
+        && incoming().uid == existing().uid
+        && (
+          (
+            isSuperAdmin() &&
+            docMatchesTenant(existing()) &&
+            !incoming().diff(existing()).affectedKeys().hasAny(['platformRole']) &&
+            (
+              userId != request.auth.uid ||
+              (
+                incoming().role == existing().role &&
+                incoming().status == existing().status &&
+                !incoming().diff(existing()).affectedKeys().hasAny(['permissions'])
+              )
+            )
+          ) ||
+          (
+            isAdmin() &&
+            docMatchesTenant(existing()) &&
+            userId != request.auth.uid &&
+            existing().role in ['certificate_officer', 'trainer', 'corporate_client', 'candidate'] &&
+            incoming().role in ['certificate_officer', 'trainer', 'corporate_client', 'candidate'] &&
+            !incoming().diff(existing()).affectedKeys().hasAny(['permissions', 'platformRole'])
+          ) ||
+          (
+            request.auth.uid == userId &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'preferredLanguage', 'lastLoginAt', 'lastAuthTime', 'authProvider', 'tenantId', 'platformRole', 'updatedAt']) &&
+            (!incoming().diff(existing()).affectedKeys().hasAny(['tenantId']) || (!('tenantId' in existing()) && incoming().tenantId == 'tenant_default')) &&
+            (!incoming().diff(existing()).affectedKeys().hasAny(['platformRole']) || (isBootstrappedSuperAdmin() && incoming().platformRole == 'platform_super_admin')) &&
+            incoming().role == existing().role &&
+            incoming().status == existing().status &&
+            !incoming().diff(existing()).affectedKeys().hasAny(['permissions'])
+          ) ||
+          (
+            !isPlatformSuperAdmin() &&
+            request.auth.uid == userId &&
+            'tenantId' in incoming() &&
+            (
+              (hasTenantMembership(incoming().tenantId) && incoming().role == tenantMembershipRole(incoming().tenantId)) ||
+              (ownsActiveRegisteredTenant(incoming().tenantId) && incoming().role == 'tenant_owner')
+            ) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['tenantId', 'role', 'lastLoginAt', 'lastAuthTime', 'authProvider', 'updatedAt']) &&
+            incoming().status == existing().status &&
+            !incoming().diff(existing()).affectedKeys().hasAny(['permissions', 'platformRole'])
+          ) ||
+          (
+            !isPlatformSuperAdmin() &&
+            request.auth.uid == userId &&
+            existing().role == 'candidate' &&
+            (!('tenantId' in existing()) || existing().tenantId == 'tenant_default') &&
+            'tenantId' in incoming() &&
+            (
+              hasPendingInviteForEmail(incoming().tenantId, incoming().role) ||
+              (ownsActiveRegisteredTenant(incoming().tenantId) && incoming().role == 'tenant_owner')
+            ) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['tenantId', 'role', 'organizationId', 'trainerId', 'candidateId', 'lastLoginAt', 'lastAuthTime', 'authProvider', 'updatedAt']) &&
+            incoming().status == existing().status &&
+            !incoming().diff(existing()).affectedKeys().hasAny(['permissions', 'platformRole'])
+          )
+        );
+      allow delete: if isValidId(userId) && isSuperAdmin() && docMatchesTenant(existing()) && userId != request.auth.uid;
+    }
+
+    match /userInvites/{inviteId} {
+      allow get: if isValidId(inviteId) && isVerified() && (
+        resource == null ||
+        existing().email.lower() == tokenEmailLower() ||
+        (isAdmin() && docMatchesTenant(existing()))
+      );
+      allow list: if isVerified() && (
+        existing().email == tokenEmailLower() ||
+        (isAdmin() && docMatchesTenant(existing()))
+      );
+      allow create: if isValidId(inviteId) && isVerified() && isValidUserInvite(incoming())
+        && isValidTimestamp(incoming().createdAt) && isValidTimestamp(incoming().updatedAt)
+        && (
+          (isPlatformSuperAdmin() && incoming().role == 'tenant_owner' && incoming().status == 'pending' && incoming().createdBy == request.auth.uid) ||
+          (
+            incomingMatchesTenant(incoming()) &&
+            (isSuperAdmin() || (isAdmin() && incoming().role in ['certificate_officer', 'trainer', 'corporate_client', 'candidate']))
+          )
+        );
+      allow update: if isValidId(inviteId) && isVerified() && isValidUserInvite(incoming())
+        && isValidTimestamp(incoming().updatedAt)
+        && incoming().createdAt == existing().createdAt
+        && (
+          (
+            !isPlatformSuperAdmin() &&
+            existing().email.lower() == tokenEmailLower() &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'tenantId', 'updatedAt']) &&
+            incoming().status == 'claimed'
+          ) ||
+          (isSuperAdmin() && docMatchesTenant(existing())) ||
+          (isAdmin() && docMatchesTenant(existing()) && incoming().role in ['certificate_officer', 'trainer', 'corporate_client', 'candidate'])
+        );
+      allow delete: if isValidId(inviteId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /candidates/{candidateDocId} {
+      allow get: if isValidId(candidateDocId) && isVerified() && (
+        (resource == null && (isStaff() || isCorporateClient())) ||
+        (resource != null && docMatchesTenant(existing()) && (
+          isStaff() ||
+          isSameOrg(existing().organizationId) ||
+          existing().userId == request.auth.uid ||
+          (isActiveUser() && 'candidateId' in currentUser() && currentUser().candidateId is string && currentUser().candidateId == candidateDocId)
+        ))
+      );
+      allow list: if isVerified() && docMatchesTenant(existing()) && (
+        isStaff() ||
+        isSameOrg(existing().organizationId) ||
+        existing().userId == request.auth.uid
+      );
+      allow create: if isValidId(candidateDocId) && isVerified() && isValidCandidate(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt) && isValidTimestamp(incoming().updatedAt)
+        && (isAdmin() || isSameOrg(incoming().organizationId));
+      allow update: if isValidId(candidateDocId) && isVerified() && isValidCandidate(incoming())
+        && docMatchesTenant(existing())
+        && isValidTimestamp(incoming().updatedAt)
+        && incoming().createdAt == existing().createdAt
+        && incoming().candidateId == existing().candidateId
+        && (
+          isAdmin() ||
+          (isSameOrg(existing().organizationId) && incoming().organizationId == existing().organizationId &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['fullNameEn', 'fullNameAr', 'gender', 'iqamaExpiryDate', 'passportExpiryDate', 'nationality', 'dateOfBirth', 'mobile', 'email', 'employeeId', 'jobTitle', 'department', 'workLocation', 'address', 'emergencyContact', 'notes', 'photoFileId', 'updatedAt']))
+        );
+      allow delete: if isValidId(candidateDocId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /candidateDocuments/{docId} {
+      allow get: if isValidId(docId) && isVerified() && (
+        (resource == null && (isAdmin() || isCertificateOfficer() || isCorporateClient())) ||
+        (resource != null && docMatchesTenant(existing()) && (
+          isAdmin() ||
+          isCertificateOfficer() ||
+          isSameOrg(existing().organizationId) ||
+          (isActiveUser() && 'candidateId' in currentUser() && currentUser().candidateId is string && currentUser().candidateId == existing().candidateId)
+        ))
+      );
+      allow list: if isVerified() && docMatchesTenant(existing()) && (
+        isAdmin() ||
+        isCertificateOfficer() ||
+        isSameOrg(existing().organizationId) ||
+        (isActiveUser() && 'candidateId' in currentUser() && currentUser().candidateId is string && currentUser().candidateId == existing().candidateId)
+      );
+      allow create: if isValidId(docId) && isVerified() && isValidCandidateDocument(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt)
+        && (isAdmin() || isSameOrg(incoming().organizationId));
+      allow update: if false;
+      allow delete: if isValidId(docId) && isVerified() && docMatchesTenant(existing()) && (isAdmin() || isSameOrg(existing().organizationId));
+    }
+
+    match /identityHashes/{hashKey} {
+      allow get: if isValidId(hashKey) && isVerified() && (isAdmin() || isCorporateClient()) && (resource == null || docMatchesTenant(existing()));
+      allow list: if isVerified() && docMatchesTenant(existing()) && isAdmin();
+      allow create: if isValidId(hashKey) && isVerified() && isValidIdentityHash(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt)
+        && (isAdmin() || isCorporateClient());
+      allow update: if false;
+      allow delete: if isValidId(hashKey) && docMatchesTenant(existing()) && isAdmin();
+    }
+
+    match /organizations/{organizationId} {
+      allow get: if isValidId(organizationId) && isVerified() && (
+        (resource == null && (isStaff() || isSameOrg(organizationId))) ||
+        (resource != null && docMatchesTenant(existing()) && (isStaff() || isSameOrg(existing().organizationId) || isSameOrg(organizationId)))
+      );
+      allow list: if isVerified() && docMatchesTenant(existing()) && (isStaff() || isSameOrg(existing().organizationId));
+      allow create: if isValidId(organizationId) && isAdmin() && isValidOrganization(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt) && isValidTimestamp(incoming().updatedAt);
+      allow update: if isValidId(organizationId) && isVerified() && isValidOrganization(incoming())
+        && docMatchesTenant(existing())
+        && isAdmin() && isValidTimestamp(incoming().updatedAt) && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(organizationId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /organizationUsers/{orgUserId} {
+      allow get: if isValidId(orgUserId) && isVerified() && (
+        (resource == null && isAdmin()) ||
+        (resource != null && docMatchesTenant(existing()) && (isAdmin() || existing().userId == request.auth.uid || isSameOrg(existing().organizationId)))
+      );
+      allow list: if isVerified() && docMatchesTenant(existing()) && (isAdmin() || existing().userId == request.auth.uid || isSameOrg(existing().organizationId));
+      allow create: if isValidId(orgUserId) && isAdmin() && isValidOrganizationUser(incoming()) && incomingMatchesTenant(incoming()) && isValidTimestamp(incoming().createdAt);
+      allow update: if isValidId(orgUserId) && isVerified() && isValidOrganizationUser(incoming()) && docMatchesTenant(existing())
+        && isAdmin() && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(orgUserId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /courses/{courseId} {
+      allow get: if isValidId(courseId) && isVerified() && !isPlatformSuperAdmin() && (resource == null || docMatchesTenant(existing()));
+      allow list: if isVerified() && docMatchesTenant(existing());
+      allow create: if isValidId(courseId) && isAdmin() && isValidCourse(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt) && isValidTimestamp(incoming().updatedAt);
+      allow update: if isValidId(courseId) && isVerified() && isValidCourse(incoming())
+        && docMatchesTenant(existing())
+        && isAdmin() && isValidTimestamp(incoming().updatedAt) && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(courseId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /trainers/{trainerId} {
+      allow get: if isValidId(trainerId) && isVerified() && (isStaff() || isCorporateClient()) && (resource == null || docMatchesTenant(existing()));
+      allow list: if isVerified() && docMatchesTenant(existing()) && (isStaff() || isCorporateClient());
+      allow create: if isValidId(trainerId) && isAdmin() && isValidTrainer(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt) && isValidTimestamp(incoming().updatedAt);
+      allow update: if isValidId(trainerId) && isVerified() && isValidTrainer(incoming())
+        && docMatchesTenant(existing())
+        && isAdmin() && isValidTimestamp(incoming().updatedAt) && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(trainerId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /batches/{batchId} {
+      allow get: if isValidId(batchId) && isVerified() && !isPlatformSuperAdmin() && (resource == null || docMatchesTenant(existing()));
+      allow list: if isVerified() && docMatchesTenant(existing());
+      allow create: if isValidId(batchId) && isAdmin() && isValidBatch(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt) && isValidTimestamp(incoming().updatedAt);
+      allow update: if isValidId(batchId) && isVerified() && isValidBatch(incoming())
+        && docMatchesTenant(existing())
+        && isValidTimestamp(incoming().updatedAt) && incoming().createdAt == existing().createdAt &&
+        (
+          isAdmin() ||
+          (isTrainer() && existing().trainerUserId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+        );
+      allow delete: if isValidId(batchId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /enrollments/{enrollmentId} {
+      allow get: if isValidId(enrollmentId) && isVerified() && (
+        (resource == null && (isStaff() || isCorporateClient())) ||
+        (resource != null && docMatchesTenant(existing()) && (
+          isAdmin() || isCertificateOfficer() ||
+          (isTrainer() && existing().trainerUserId == request.auth.uid) ||
+          isSameOrg(existing().organizationId) ||
+          existing().candidateUserId == request.auth.uid
+        ))
+      );
+      allow list: if isVerified() && docMatchesTenant(existing()) && (
+        isAdmin() || isCertificateOfficer() ||
+        (isTrainer() && existing().trainerUserId == request.auth.uid) ||
+        isSameOrg(existing().organizationId) ||
+        existing().candidateUserId == request.auth.uid
+      );
+      allow create: if isValidId(enrollmentId) && isVerified() && isValidEnrollment(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt) && isValidTimestamp(incoming().updatedAt)
+        && (
+          isAdmin() ||
+          (isSameOrg(incoming().organizationId) && incoming().status == 'pending')
+        );
+      allow update: if isValidId(enrollmentId) && isVerified() && isValidEnrollment(incoming())
+        && docMatchesTenant(existing())
+        && isValidTimestamp(incoming().updatedAt) && incoming().createdAt == existing().createdAt &&
+        (
+          isSuperAdmin() ||
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'trainingCardId', 'batchId', 'trainerId', 'trainerUserId', 'capacityOverride', 'capacityOverrideReason', 'capacityOverrideBy', 'prerequisiteConfirmed', 'notes', 'updatedAt'])) ||
+          (isTrainer() && existing().trainerUserId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['trainerRecommended', 'trainerRecommendedBy', 'status', 'updatedAt'])) ||
+          (isCertificateOfficer() && incoming().diff(existing()).affectedKeys().hasOnly(['completionApproved', 'completionApprovedBy', 'certificateId', 'status', 'updatedAt']))
+        );
+      allow delete: if isValidId(enrollmentId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /enrollmentRequests/{requestId} {
+      allow get: if isValidId(requestId) && isVerified() && (
+        (resource == null && (isAdmin() || isCorporateClient())) ||
+        (resource != null && docMatchesTenant(existing()) && (
+          isAdmin() || isSameOrg(existing().organizationId)
+        ))
+      );
+      allow list: if isVerified() && docMatchesTenant(existing()) && (
+        isAdmin() || isSameOrg(existing().organizationId)
+      );
+      allow create: if isValidId(requestId) && isVerified() && isValidEnrollmentRequest(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt) && isValidTimestamp(incoming().updatedAt)
+        && (
+          isAdmin() ||
+          (
+            isSameOrg(incoming().organizationId) &&
+            incoming().status == 'pending_review' &&
+            incoming().requestedBy == request.auth.uid &&
+            !('assignedBatchId' in incoming()) &&
+            !('reviewedBy' in incoming()) &&
+            !('reviewedByName' in incoming()) &&
+            !('decisionDate' in incoming()) &&
+            !('createdEnrollmentIds' in incoming())
+          )
+        );
+      allow update: if isValidId(requestId) && isVerified() && isValidEnrollmentRequest(incoming())
+        && docMatchesTenant(existing())
+        && isValidTimestamp(incoming().updatedAt)
+        && incoming().createdAt == existing().createdAt
+        && incoming().requestNumber == existing().requestNumber
+        && incoming().organizationId == existing().organizationId
+        && (
+          isAdmin() ||
+          (
+            isSameOrg(existing().organizationId) &&
+            existing().status == 'info_requested' &&
+            incoming().status == 'pending_review' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['candidateDocIds', 'preferredBatchId', 'requestNotes', 'corporateResponseNotes', 'status', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(requestId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /attendance/{attendanceId} {
+      allow get: if isValidId(attendanceId) && isVerified() && (
+        (resource == null && (isStaff() || isCorporateClient())) ||
+        (resource != null && docMatchesTenant(existing()) && (
+          isAdmin() || isCertificateOfficer() ||
+          (isTrainer() && existing().trainerUserId == request.auth.uid) ||
+          isSameOrg(existing().organizationId)
+        ))
+      );
+      allow list: if isVerified() && docMatchesTenant(existing()) && (
+        isAdmin() || isCertificateOfficer() ||
+        (isTrainer() && existing().trainerUserId == request.auth.uid) ||
+        isSameOrg(existing().organizationId)
+      );
+      allow create: if isValidId(attendanceId) && isVerified() && isValidAttendance(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt) && isValidTimestamp(incoming().updatedAt)
+        && (isAdmin() || (isTrainer() && incoming().trainerUserId == request.auth.uid));
+      allow update: if isValidId(attendanceId) && isVerified() && isValidAttendance(incoming())
+        && docMatchesTenant(existing())
+        && isValidTimestamp(incoming().updatedAt) && incoming().createdAt == existing().createdAt &&
+        (
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'remarks', 'markedBy', 'submissionStatus', 'submittedAt', 'submittedBy', 'correctedBy', 'correctionReason', 'updatedAt'])) ||
+          (isTrainer() && existing().trainerUserId == request.auth.uid && (!('submissionStatus' in existing()) || existing().submissionStatus != 'submitted')
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'remarks', 'markedBy', 'submissionStatus', 'submittedAt', 'submittedBy', 'updatedAt']))
+        );
+      allow delete: if isValidId(attendanceId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /assessments/{assessmentId} {
+      allow get: if isValidId(assessmentId) && isVerified() && (
+        (resource == null && (isStaff() || isCorporateClient())) ||
+        (resource != null && docMatchesTenant(existing()) && (
+          isAdmin() || isCertificateOfficer() ||
+          (isTrainer() && existing().trainerUserId == request.auth.uid) ||
+          isSameOrg(existing().organizationId)
+        ))
+      );
+      allow list: if isVerified() && docMatchesTenant(existing()) && (
+        isAdmin() || isCertificateOfficer() ||
+        (isTrainer() && existing().trainerUserId == request.auth.uid) ||
+        isSameOrg(existing().organizationId)
+      );
+      allow create: if isValidId(assessmentId) && isVerified() && isValidAssessment(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt)
+        && (isAdmin() || isCertificateOfficer() || (isTrainer() && incoming().trainerUserId == request.auth.uid));
+      allow update: if isValidId(assessmentId) && isVerified() && isValidAssessment(incoming())
+        && docMatchesTenant(existing())
+        && incoming().createdAt == existing().createdAt
+        && isValidTimestamp(incoming().updatedAt)
+        && (
+          isAdmin() ||
+          (
+            (isCertificateOfficer() || (isTrainer() && existing().trainerUserId == request.auth.uid))
+            && incoming().diff(existing()).affectedKeys().hasOnly(['assessmentStatus', 'correctionReason', 'correctedMarks', 'correctedResult', 'correctionRequestedBy', 'updatedAt'])
+            && incoming().assessmentStatus == 'pending_correction'
+          )
+        );
+      allow delete: if isValidId(assessmentId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /trainingCards/{cardId} {
+      allow get: if isValidId(cardId) && isVerified() && (
+        (resource == null && (isStaff() || isCorporateClient())) ||
+        (resource != null && docMatchesTenant(existing()) && (
+          isAdmin() || isCertificateOfficer() || isTrainer() ||
+          isSameOrg(existing().organizationId) ||
+          existing().candidateUserId == request.auth.uid
+        ))
+      );
+      allow list: if isVerified() && docMatchesTenant(existing()) && (
+        isAdmin() || isCertificateOfficer() || isTrainer() ||
+        isSameOrg(existing().organizationId) ||
+        existing().candidateUserId == request.auth.uid
+      );
+      allow create: if isValidId(cardId) && isAdmin() && isValidTrainingCard(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt);
+      allow update: if isValidId(cardId) && isVerified() && isValidTrainingCard(incoming())
+        && docMatchesTenant(existing())
+        && isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['status']);
+      allow delete: if isValidId(cardId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /certificates/{certificateId} {
+      allow get: if isValidId(certificateId) && isVerified() && (
+        (resource == null && (isStaff() || isCorporateClient())) ||
+        (resource != null && docMatchesTenant(existing()) && (
+          isAdmin() || isCertificateOfficer() ||
+          isSameOrg(existing().organizationId) ||
+          existing().candidateUserId == request.auth.uid
+        ))
+      );
+      allow list: if isVerified() && docMatchesTenant(existing()) && (
+        isAdmin() || isCertificateOfficer() ||
+        isSameOrg(existing().organizationId) ||
+        existing().candidateUserId == request.auth.uid
+      );
+      allow create: if isValidId(certificateId) && isCertificateOfficer() && isValidCertificate(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt) && isValidTimestamp(incoming().updatedAt);
+      allow update: if isValidId(certificateId) && isVerified() && isValidCertificate(incoming())
+        && docMatchesTenant(existing())
+        && isCertificateOfficer()
+        && isValidTimestamp(incoming().updatedAt) && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'revocationReason', 'revokedBy', 'supersededBy', 'updatedAt']);
+      allow delete: if isValidId(certificateId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /publicVerifications/{lookupKey} {
+      allow get: if isValidId(lookupKey);
+      allow list: if false;
+      allow create: if isValidId(lookupKey) && isCertificateOfficer() && isValidPublicVerification(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().updatedAt);
+      allow update: if isValidId(lookupKey) && isVerified() && isValidPublicVerification(incoming())
+        && docMatchesTenant(existing())
+        && isCertificateOfficer()
+        && isValidTimestamp(incoming().updatedAt)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'supersededBy', 'updatedAt']);
+      allow delete: if isValidId(lookupKey) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /certificateTemplates/{templateId} {
+      allow get: if isValidId(templateId) && isVerified() && isStaff() && (resource == null || docMatchesTenant(existing()));
+      allow list: if isVerified() && docMatchesTenant(existing()) && isStaff();
+      allow create: if isValidId(templateId) && isAdmin() && isValidTemplate(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt) && isValidTimestamp(incoming().updatedAt);
+      allow update: if isValidId(templateId) && isVerified() && isValidTemplate(incoming())
+        && docMatchesTenant(existing())
+        && isAdmin() && isValidTimestamp(incoming().updatedAt) && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(templateId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /cardTemplates/{templateId} {
+      allow get: if isValidId(templateId) && isVerified() && isStaff() && (resource == null || docMatchesTenant(existing()));
+      allow list: if isVerified() && docMatchesTenant(existing()) && isStaff();
+      allow create: if isValidId(templateId) && isAdmin() && isValidTemplate(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt) && isValidTimestamp(incoming().updatedAt);
+      allow update: if isValidId(templateId) && isVerified() && isValidTemplate(incoming())
+        && docMatchesTenant(existing())
+        && isAdmin() && isValidTimestamp(incoming().updatedAt) && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(templateId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /companySettings/{settingId} {
+      allow get: if isValidId(settingId) && isVerified() && !isPlatformSuperAdmin() && (resource == null || docMatchesTenant(existing()));
+      allow list: if isVerified() && docMatchesTenant(existing());
+      allow create: if isValidId(settingId) && isValidCompanySettings(incoming())
+        && isValidTimestamp(incoming().updatedAt)
+        && (
+          (isPlatformSuperAdmin() && settingId == incoming().tenantId) ||
+          (isSuperAdmin() && incomingMatchesTenant(incoming())) ||
+          (settingId == incoming().tenantId && hasTenantMembership(settingId) && tenantMembershipRole(settingId) in ['super_admin', 'tenant_owner']) ||
+          (settingId == incoming().tenantId && ownsActiveRegisteredTenant(incoming().tenantId))
+        );
+      allow update: if isValidId(settingId) && isVerified() && isValidCompanySettings(incoming())
+        && docMatchesTenant(existing())
+        && isValidTimestamp(incoming().updatedAt)
+        && (
+          isSuperAdmin() ||
+          (hasTenantMembership(settingId) && tenantMembershipRole(settingId) in ['super_admin', 'tenant_owner'])
+        );
+      allow delete: if false;
+    }
+
+    match /notifications/{notificationId} {
+      allow get: if isValidId(notificationId) && isVerified() && (
+        (resource == null && isActiveUser()) ||
+        (resource != null && docMatchesTenant(existing()) && (
+          isAdmin() || existing().targetUserId == request.auth.uid || existing().targetRole == userRole() || isSameOrg(existing().organizationId)
+        ))
+      );
+      allow list: if isVerified() && docMatchesTenant(existing()) && (
+        isAdmin() || existing().targetUserId == request.auth.uid || existing().targetRole == userRole() || isSameOrg(existing().organizationId)
+      );
+      allow create: if isValidId(notificationId) && isVerified() && isValidNotification(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt)
+        && (isStaff() || isCorporateClient());
+      allow update: if isValidId(notificationId) && isVerified() && isValidNotification(incoming())
+        && docMatchesTenant(existing())
+        && (isAdmin() || existing().targetUserId == request.auth.uid || existing().targetRole == userRole() || isSameOrg(existing().organizationId))
+        && incoming().diff(existing()).affectedKeys().hasOnly(['read']);
+      allow delete: if isValidId(notificationId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /messageTemplates/{templateId} {
+      allow get: if isValidId(templateId) && isVerified() && isStaff() && (resource == null || docMatchesTenant(existing()));
+      allow list: if isVerified() && docMatchesTenant(existing()) && isStaff();
+      allow create: if isValidId(templateId) && isAdmin() && isValidMessageTemplate(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt) && isValidTimestamp(incoming().updatedAt);
+      allow update: if isValidId(templateId) && isVerified() && isValidMessageTemplate(incoming())
+        && docMatchesTenant(existing())
+        && isAdmin() && isValidTimestamp(incoming().updatedAt) && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(templateId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /importJobs/{jobId} {
+      allow get: if isValidId(jobId) && isVerified() && (
+        (resource == null && (isAdmin() || isCorporateClient() || isTrainer())) ||
+        (resource != null && docMatchesTenant(existing()) && (
+          isAdmin() ||
+          isSameOrg(existing().organizationId) ||
+          (isTrainer() && existing().importType == 'attendance' && existing().createdBy == request.auth.uid)
+        ))
+      );
+      allow list: if isVerified() && docMatchesTenant(existing()) && (
+        isAdmin() ||
+        isSameOrg(existing().organizationId) ||
+        (isTrainer() && existing().importType == 'attendance' && existing().createdBy == request.auth.uid)
+      );
+      allow create: if isValidId(jobId) && isVerified() && isValidImportJob(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt)
+        && incoming().createdBy == request.auth.uid
+        && (
+          isAdmin() ||
+          isSameOrg(incoming().organizationId) ||
+          (isTrainer() && incoming().importType == 'attendance')
+        );
+      allow update: if false;
+      allow delete: if isValidId(jobId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /auditLogs/{logId} {
+      allow get: if isValidId(logId) && isVerified() && (
+        (resource == null && isStaff()) ||
+        (resource != null && docMatchesTenant(existing()) && (
+          isSuperAdmin() ||
+          (isAdmin() && existing().entityType in ['courses', 'trainers', 'batches']) ||
+          (isTrainer() && existing().entityType == 'trainers' && existing().entityId == currentUser().trainerId)
+        ))
+      );
+      allow list: if docMatchesTenant(existing()) && (
+        isSuperAdmin() ||
+        (isAdmin() && existing().entityType in ['courses', 'trainers', 'batches']) ||
+        (isTrainer() && existing().entityType == 'trainers' && existing().entityId == currentUser().trainerId)
+      );
+      allow create: if isValidId(logId) && isVerified() && isValidAuditLog(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt)
+        && incoming().actorUid == request.auth.uid;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    match /verificationLogs/{logId} {
+      allow get: if isValidId(logId) && isVerified() && (isSuperAdmin() || isCertificateOfficer()) && (resource == null || docMatchesTenant(existing()));
+      allow list: if isVerified() && docMatchesTenant(existing()) && (isSuperAdmin() || isCertificateOfficer());
+      allow create: if isValidId(logId) && isValidVerificationLog(incoming()) && isValidTimestamp(incoming().createdAt)
+        && (
+          (incoming().mode == 'public' && !('actorUid' in incoming())) ||
+          (isVerified() && incomingMatchesTenant(incoming()) && incoming().actorUid == request.auth.uid)
+        );
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    match /deliveryLogs/{logId} {
+      allow get: if isValidId(logId) && isVerified() && (
+        (resource == null && isActiveUser()) ||
+        (resource != null && docMatchesTenant(existing()) && (
+          isAdmin() ||
+          isCertificateOfficer() ||
+          isSameOrg(existing().organizationId) ||
+          (isTrainer() && existing().sentBy == request.auth.uid) ||
+          (isActiveUser() && existing().candidateDocId is string && 'candidateId' in currentUser() && currentUser().candidateId is string && currentUser().candidateId == existing().candidateDocId)
+        ))
+      );
+      allow list: if isVerified() && docMatchesTenant(existing()) && (
+        isAdmin() ||
+        isCertificateOfficer() ||
+        isSameOrg(existing().organizationId) ||
+        (isTrainer() && existing().sentBy == request.auth.uid) ||
+        (isActiveUser() && existing().candidateDocId is string && 'candidateId' in currentUser() && currentUser().candidateId is string && currentUser().candidateId == existing().candidateDocId)
+      );
+      allow create: if isValidId(logId) && isVerified() && isValidDeliveryLog(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().createdAt)
+        && incoming().sentBy == request.auth.uid
+        && (isStaff() || isSameOrg(incoming().organizationId));
+      allow update: if isValidId(logId) && isVerified() && isValidDeliveryLog(incoming())
+        && docMatchesTenant(existing())
+        && (isAdmin() || isCertificateOfficer())
+        && isValidTimestamp(incoming().updatedAt) && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['channel', 'deliveryStatus', 'failureReason', 'providerMessageId', 'providerStatusDetails', 'retryCount', 'lastRetryAt', 'deliveredAt', 'manualUrl', 'updatedAt']);
+      allow delete: if isValidId(logId) && isSuperAdmin() && docMatchesTenant(existing());
+    }
+
+    match /systemSettings/{settingId} {
+      allow get: if isValidId(settingId) && isVerified() && (
+        (resource == null && (
+          isSuperAdmin() ||
+          (isActiveUser() && (settingId.matches('^.*_(general|permissions)$') || settingId in ['general', 'permissions']))
+        )) ||
+        (resource != null && docMatchesTenant(existing()) && (
+          isSuperAdmin() ||
+          (isActiveUser() && ('key' in existing() ? existing().key in ['general', 'permissions'] : settingId in ['general', 'permissions']))
+        ))
+      );
+      allow list: if isVerified() && isSuperAdmin() && docMatchesTenant(existing());
+      allow create: if isValidId(settingId) && isValidSystemSettings(incoming())
+        && isValidTimestamp(incoming().updatedAt)
+        && (
+          (isPlatformSuperAdmin() && settingId == incoming().tenantId + '_general' && incoming().key == 'general') ||
+          (isSuperAdmin() && incomingMatchesTenant(incoming())) ||
+          ownsActiveRegisteredTenant(incoming().tenantId)
+        );
+      allow update: if isValidId(settingId) && isVerified() && isValidSystemSettings(incoming())
+        && docMatchesTenant(existing())
+        && isSuperAdmin() && isValidTimestamp(incoming().updatedAt);
+      allow delete: if false;
+    }
+
+    match /counters/{counterId} {
+      allow get: if isValidId(counterId) && isVerified() && (isStaff() || isCorporateClient()) && (resource == null || docMatchesTenant(existing()));
+      allow list: if false;
+      allow create: if isValidId(counterId) && isVerified() && isValidCounter(incoming())
+        && incomingMatchesTenant(incoming())
+        && isValidTimestamp(incoming().updatedAt)
+        && (isStaff() || isCorporateClient());
+      allow update: if isValidId(counterId) && isVerified() && isValidCounter(incoming())
+        && docMatchesTenant(existing())
+        && isValidTimestamp(incoming().updatedAt)
+        && (isStaff() || isCorporateClient())
+        && incoming().value == existing().value + 1;
+      allow delete: if false;
+    }
+  }
+}

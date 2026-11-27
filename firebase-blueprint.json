@@ -1,0 +1,1035 @@
+{
+  "entities": {
+    "SaasTenant": {
+      "title": "SaasTenant",
+      "description": "Independent training center tenant organization subscribed to the SaaS platform.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "tenantCode": { "type": "string", "maxLength": 32 },
+        "nameEn": { "type": "string", "minLength": 2, "maxLength": 200 },
+        "nameAr": { "type": "string", "minLength": 2, "maxLength": 200 },
+        "legalName": { "type": "string", "maxLength": 240 },
+        "crNumber": { "type": "string", "maxLength": 64 },
+        "vatNumber": { "type": "string", "maxLength": 40 },
+        "slug": { "type": "string", "maxLength": 120 },
+        "contactEmail": { "type": "string", "maxLength": 200 },
+        "contactPhone": { "type": "string", "maxLength": 40 },
+        "country": { "type": "string", "maxLength": 80 },
+        "city": { "type": "string", "maxLength": 120 },
+        "address": { "type": "string", "maxLength": 400 },
+        "website": { "type": "string", "maxLength": 200 },
+        "status": { "type": "string", "enum": ["trial", "active", "grace_period", "suspended", "cancelled"] },
+        "planCode": { "type": "string", "maxLength": 48 },
+        "billingCycle": { "type": "string", "enum": ["monthly", "annual"] },
+        "trialStartsAt": { "type": "string", "maxLength": 40 },
+        "trialEndsAt": { "type": "string", "maxLength": 40 },
+        "isDefaultLegacyTenant": { "type": "boolean" },
+        "migrationCompleted": { "type": "boolean" },
+        "onboardingCompleted": { "type": "boolean" },
+        "defaultLanguage": { "type": "string", "enum": ["en", "ar"] },
+        "timezone": { "type": "string", "maxLength": 64 },
+        "ownerUserId": { "type": "string", "maxLength": 128 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "activatedAt": { "type": "string", "maxLength": 40 },
+        "migratedAt": { "type": "string", "maxLength": 40 },
+        "migratedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tenantId", "tenantCode", "nameEn", "nameAr", "slug", "status", "planCode", "createdAt", "updatedAt"]
+    },
+    "SaasUser": {
+      "title": "SaasUser",
+      "description": "Global SaaS user identity record linking Firebase UID to optional platform role and default tenant workspace.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "displayName": { "type": "string", "maxLength": 160 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "preferredLanguage": { "type": "string", "enum": ["en", "ar"] },
+        "platformRole": { "type": "string", "enum": ["platform_super_admin", "platform_admin", "platform_support", "platform_finance"] },
+        "defaultTenantId": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "status", "createdAt", "updatedAt"]
+    },
+    "TenantMembership": {
+      "title": "TenantMembership",
+      "description": "Tenant-scoped user membership binding a Firebase user to a specific tenant workspace and role.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "displayName": { "type": "string", "maxLength": 160 },
+        "role": { "type": "string", "enum": ["super_admin", "tenant_owner", "admin", "tenant_admin", "certificate_officer", "trainer", "corporate_client", "candidate"] },
+        "status": { "type": "string", "enum": ["active", "invited", "suspended"] },
+        "organizationId": { "type": "string", "maxLength": 128 },
+        "trainerId": { "type": "string", "maxLength": 128 },
+        "candidateId": { "type": "string", "maxLength": 128 },
+        "isDefault": { "type": "boolean" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tenantId", "uid", "email", "role", "status", "createdAt", "updatedAt"]
+    },
+    "PlatformSettings": {
+      "title": "PlatformSettings",
+      "description": "Global SaaS platform settings managed exclusively by Platform Super Admins.",
+      "type": "object",
+      "properties": {
+        "key": { "type": "string", "maxLength": 64 },
+        "config": { "type": "object" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["key", "config", "updatedBy", "updatedAt"]
+    },
+    "PlatformAuditLog": {
+      "title": "PlatformAuditLog",
+      "description": "Immutable SaaS platform administrative and migration audit trail.",
+      "type": "object",
+      "properties": {
+        "actorUid": { "type": "string", "maxLength": 128 },
+        "actorEmail": { "type": "string", "maxLength": 200 },
+        "platformRole": { "type": "string", "enum": ["platform_super_admin", "platform_admin", "platform_support", "platform_finance"] },
+        "action": { "type": "string", "maxLength": 120 },
+        "entityType": { "type": "string", "maxLength": 80 },
+        "entityId": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "details": { "type": "string", "maxLength": 2000 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["actorUid", "platformRole", "action", "entityType", "entityId", "createdAt"]
+    },
+    "SubscriptionPlan": {
+      "title": "SubscriptionPlan",
+      "description": "SaaS subscription pricing plan displayed on the public landing page and managed by Platform Super Admin.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "maxLength": 48 },
+        "nameEn": { "type": "string", "maxLength": 120 },
+        "nameAr": { "type": "string", "maxLength": 120 },
+        "taglineEn": { "type": "string", "maxLength": 240 },
+        "taglineAr": { "type": "string", "maxLength": 240 },
+        "priceMonthly": { "type": "number" },
+        "priceAnnual": { "type": "number" },
+        "currency": { "type": "string", "maxLength": 8 },
+        "recommended": { "type": "boolean" },
+        "isActive": { "type": "boolean" },
+        "displayOrder": { "type": "number" },
+        "featuresEn": { "type": "array" },
+        "featuresAr": { "type": "array" },
+        "limits": { "type": "object" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "nameEn", "nameAr", "priceMonthly", "priceAnnual", "currency", "isActive", "updatedAt"]
+    },
+    "PlatformLead": {
+      "title": "PlatformLead",
+      "description": "Public contact and support inquiry submitted through the SaaS landing page.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 160 },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "companyName": { "type": "string", "maxLength": 200 },
+        "subject": { "type": "string", "maxLength": 200 },
+        "message": { "type": "string", "maxLength": 3000 },
+        "preferredLanguage": { "type": "string", "enum": ["en", "ar"] },
+        "status": { "type": "string", "enum": ["new", "reviewed", "resolved"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "email", "subject", "message", "status", "createdAt", "updatedAt"]
+    },
+    "PendingTenantRegistration": {
+      "title": "PendingTenantRegistration",
+      "description": "Staged tenant registration awaiting Firebase email verification before provisioning.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "maxLength": 128 },
+        "ownerEmail": { "type": "string", "format": "email", "maxLength": 200 },
+        "ownerDisplayName": { "type": "string", "maxLength": 160 },
+        "ownerMobile": { "type": "string", "maxLength": 32 },
+        "proposedTenantId": { "type": "string", "maxLength": 128 },
+        "nameEn": { "type": "string", "maxLength": 200 },
+        "nameAr": { "type": "string", "maxLength": 200 },
+        "legalName": { "type": "string", "maxLength": 240 },
+        "crNumber": { "type": "string", "maxLength": 64 },
+        "vatNumber": { "type": "string", "maxLength": 40 },
+        "country": { "type": "string", "maxLength": 80 },
+        "city": { "type": "string", "maxLength": 120 },
+        "address": { "type": "string", "maxLength": 400 },
+        "website": { "type": "string", "maxLength": 200 },
+        "companyEmail": { "type": "string", "maxLength": 200 },
+        "companyPhone": { "type": "string", "maxLength": 40 },
+        "planCode": { "type": "string", "maxLength": 48 },
+        "billingCycle": { "type": "string", "enum": ["monthly", "annual"] },
+        "defaultLanguage": { "type": "string", "enum": ["en", "ar"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "ownerEmail", "ownerDisplayName", "proposedTenantId", "nameEn", "planCode", "billingCycle", "createdAt", "updatedAt"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Application user account with RBAC role, tenant binding, optional platform role, granular permissions, session metadata, and organization, trainer, or candidate binding.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "displayName": { "type": "string", "maxLength": 160 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "role": { "type": "string", "enum": ["super_admin", "tenant_owner", "admin", "tenant_admin", "certificate_officer", "trainer", "corporate_client", "candidate"] },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "platformRole": { "type": "string", "enum": ["platform_super_admin", "platform_admin", "platform_support", "platform_finance"] },
+        "organizationId": { "type": "string", "maxLength": 128 },
+        "trainerId": { "type": "string", "maxLength": 128 },
+        "candidateId": { "type": "string", "maxLength": 128 },
+        "permissions": { "type": "object" },
+        "preferredLanguage": { "type": "string", "enum": ["en", "ar"] },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "lastLoginAt": { "type": "string", "maxLength": 40 },
+        "lastAuthTime": { "type": "number" },
+        "authProvider": { "type": "string", "maxLength": 40 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "role", "preferredLanguage", "status", "createdAt", "updatedAt"]
+    },
+    "UserInvite": {
+      "title": "UserInvite",
+      "description": "Pre-provisioned tenant role assignment keyed by tenant-scoped normalized email hash for automatic binding on sign-in.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "displayName": { "type": "string", "maxLength": 160 },
+        "role": { "type": "string", "enum": ["super_admin", "tenant_owner", "admin", "tenant_admin", "certificate_officer", "trainer", "corporate_client", "candidate"] },
+        "organizationId": { "type": "string", "maxLength": 128 },
+        "trainerId": { "type": "string", "maxLength": 128 },
+        "candidateId": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["pending", "claimed", "revoked"] },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "role", "status", "createdBy", "createdAt", "updatedAt"]
+    },
+    "Candidate": {
+      "title": "Candidate",
+      "description": "Tenant-isolated trainee candidate with encrypted sensitive identity fields, employment metadata, and masked display values.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "candidateId": { "type": "string", "maxLength": 40, "pattern": "^[A-Z0-9\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128 },
+        "fullNameEn": { "type": "string", "minLength": 2, "maxLength": 200 },
+        "fullNameAr": { "type": "string", "minLength": 2, "maxLength": 200 },
+        "gender": { "type": "string", "enum": ["male", "female"] },
+        "iqamaEncrypted": { "type": "string", "maxLength": 512 },
+        "iqamaMasked": { "type": "string", "maxLength": 32 },
+        "iqamaHash": { "type": "string", "maxLength": 128 },
+        "iqamaExpiryDate": { "type": "string", "maxLength": 32 },
+        "passportEncrypted": { "type": "string", "maxLength": 512 },
+        "passportMasked": { "type": "string", "maxLength": 32 },
+        "passportHash": { "type": "string", "maxLength": 128 },
+        "passportExpiryDate": { "type": "string", "maxLength": 32 },
+        "nationality": { "type": "string", "maxLength": 100 },
+        "dateOfBirth": { "type": "string", "maxLength": 32 },
+        "mobile": { "type": "string", "maxLength": 32 },
+        "email": { "type": "string", "maxLength": 200 },
+        "organizationId": { "type": "string", "maxLength": 128 },
+        "companyName": { "type": "string", "maxLength": 200 },
+        "employeeId": { "type": "string", "maxLength": 64 },
+        "jobTitle": { "type": "string", "maxLength": 160 },
+        "department": { "type": "string", "maxLength": 160 },
+        "workLocation": { "type": "string", "maxLength": 200 },
+        "address": { "type": "string", "maxLength": 400 },
+        "emergencyContact": { "type": "string", "maxLength": 200 },
+        "notes": { "type": "string", "maxLength": 1500 },
+        "photoFileId": { "type": "string", "maxLength": 256 },
+        "registrationDate": { "type": "string", "maxLength": 32 },
+        "status": { "type": "string", "enum": ["active", "inactive", "archived", "suspended"] },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["candidateId", "fullNameEn", "fullNameAr", "nationality", "mobile", "registrationDate", "status", "createdBy", "createdAt", "updatedAt"]
+    },
+    "CandidateDocument": {
+      "title": "CandidateDocument",
+      "description": "Metadata for private identity documents uploaded for a candidate within a tenant.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "candidateDocId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "candidateId": { "type": "string", "maxLength": 128 },
+        "organizationId": { "type": "string", "maxLength": 128 },
+        "documentType": { "type": "string", "enum": ["photo", "iqama_copy", "passport_copy", "additional"] },
+        "fileName": { "type": "string", "maxLength": 255 },
+        "mimeType": { "type": "string", "enum": ["application/pdf", "image/jpeg", "image/jpg", "image/png"], "maxLength": 100 },
+        "fileSize": { "type": "number", "description": "File size in bytes (1 to 5242880, max 5MB)" },
+        "fileId": { "type": "string", "maxLength": 256 },
+        "uploadedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["candidateDocId", "candidateId", "documentType", "fileName", "mimeType", "fileSize", "fileId", "uploadedBy", "createdAt"]
+    },
+    "IdentityHash": {
+      "title": "IdentityHash",
+      "description": "Tenant-scoped keyed HMAC-SHA256 index enforcing uniqueness of Iqama and Passport numbers without storing plaintext.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "hashKey": { "type": "string", "maxLength": 160, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "idType": { "type": "string", "enum": ["iqama", "passport"] },
+        "candidateDocId": { "type": "string", "maxLength": 128 },
+        "candidateId": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["hashKey", "idType", "candidateDocId", "candidateId", "createdAt"]
+    },
+    "Organization": {
+      "title": "Organization",
+      "description": "Corporate client organization registering employees for training courses within a tenant.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "organizationId": { "type": "string", "maxLength": 64, "pattern": "^[A-Z0-9\\-]+$" },
+        "nameEn": { "type": "string", "minLength": 2, "maxLength": 200 },
+        "nameAr": { "type": "string", "minLength": 2, "maxLength": 200 },
+        "crNumber": { "type": "string", "maxLength": 64 },
+        "vatNumber": { "type": "string", "maxLength": 40 },
+        "contactPerson": { "type": "string", "maxLength": 160 },
+        "contactDesignation": { "type": "string", "maxLength": 120 },
+        "mobile": { "type": "string", "maxLength": 32 },
+        "email": { "type": "string", "maxLength": 200 },
+        "address": { "type": "string", "maxLength": 400 },
+        "city": { "type": "string", "maxLength": 120 },
+        "billingInfo": { "type": "string", "maxLength": 600 },
+        "notes": { "type": "string", "maxLength": 1500 },
+        "status": { "type": "string", "enum": ["active", "inactive", "suspended"] },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["organizationId", "nameEn", "nameAr", "contactPerson", "mobile", "email", "status", "createdBy", "createdAt", "updatedAt"]
+    },
+    "OrganizationUser": {
+      "title": "OrganizationUser",
+      "description": "Mapping linking corporate users to their corporate client organization inside a tenant.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "organizationId": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 200 },
+        "displayName": { "type": "string", "maxLength": 160 },
+        "status": { "type": "string", "enum": ["active", "revoked"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["organizationId", "userId", "email", "status", "createdAt"]
+    },
+    "Course": {
+      "title": "Course",
+      "description": "Configurable tenant-scoped professional training course.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "courseId": { "type": "string", "maxLength": 64, "pattern": "^[A-Z0-9\\-]+$" },
+        "courseCode": { "type": "string", "minLength": 2, "maxLength": 40 },
+        "titleEn": { "type": "string", "minLength": 2, "maxLength": 220 },
+        "titleAr": { "type": "string", "minLength": 2, "maxLength": 220 },
+        "descriptionEn": { "type": "string", "maxLength": 2000 },
+        "descriptionAr": { "type": "string", "maxLength": 2000 },
+        "category": { "type": "string", "maxLength": 120 },
+        "courseType": { "type": "string", "enum": ["theoretical", "practical", "blended", "certification", "refresher"] },
+        "duration": { "type": "number" },
+        "durationUnit": { "type": "string", "enum": ["hours", "days", "weeks"] },
+        "theoryHours": { "type": "number" },
+        "practicalHours": { "type": "number" },
+        "fee": { "type": "number" },
+        "minAttendancePct": { "type": "number" },
+        "minExamScore": { "type": "number" },
+        "examRequired": { "type": "boolean" },
+        "practicalRequired": { "type": "boolean" },
+        "validityMonths": { "type": "number" },
+        "prerequisites": { "type": "string", "maxLength": 600 },
+        "imageFileId": { "type": "string", "maxLength": 256 },
+        "supportingDocIds": { "type": "array" },
+        "defaultCertificateTemplateId": { "type": "string", "maxLength": 128 },
+        "defaultCardTemplateId": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["active", "inactive", "archived"] },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["courseId", "courseCode", "titleEn", "titleAr", "category", "duration", "durationUnit", "minAttendancePct", "minExamScore", "examRequired", "practicalRequired", "status", "createdBy", "createdAt", "updatedAt"]
+    },
+    "Trainer": {
+      "title": "Trainer",
+      "description": "Certified instructor profile scoped to a training center tenant.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "trainerId": { "type": "string", "maxLength": 64, "pattern": "^[A-Z0-9\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128 },
+        "nameEn": { "type": "string", "minLength": 2, "maxLength": 200 },
+        "nameAr": { "type": "string", "minLength": 2, "maxLength": 200 },
+        "mobile": { "type": "string", "maxLength": 32 },
+        "email": { "type": "string", "maxLength": 200 },
+        "nationality": { "type": "string", "maxLength": 100 },
+        "qualifications": { "type": "string", "maxLength": 500 },
+        "certifications": { "type": "string", "maxLength": 500 },
+        "specialization": { "type": "string", "maxLength": 200 },
+        "experienceYears": { "type": "number" },
+        "employmentStatus": { "type": "string", "enum": ["full_time", "part_time", "contract", "freelance"] },
+        "photoFileId": { "type": "string", "maxLength": 256 },
+        "credentialFileIds": { "type": "array" },
+        "assignedCourseIds": { "type": "array" },
+        "status": { "type": "string", "enum": ["active", "inactive", "archived"] },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["trainerId", "nameEn", "nameAr", "mobile", "email", "specialization", "status", "createdBy", "createdAt", "updatedAt"]
+    },
+    "Batch": {
+      "title": "Batch",
+      "description": "Scheduled training batch linking a course, trainer, venue, mode, dates, capacity, and enrollment controls within a tenant.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "batchId": { "type": "string", "maxLength": 64, "pattern": "^[A-Z0-9\\-]+$" },
+        "batchNumber": { "type": "string", "maxLength": 64 },
+        "batchName": { "type": "string", "maxLength": 200 },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "trainerId": { "type": "string", "maxLength": 128 },
+        "trainerUserId": { "type": "string", "maxLength": 128 },
+        "venue": { "type": "string", "maxLength": 200 },
+        "trainingMode": { "type": "string", "enum": ["classroom", "practical", "online", "hybrid"] },
+        "startDate": { "type": "string", "maxLength": 32 },
+        "endDate": { "type": "string", "maxLength": 32 },
+        "startTime": { "type": "string", "maxLength": 16 },
+        "endTime": { "type": "string", "maxLength": 16 },
+        "capacity": { "type": "number" },
+        "minParticipants": { "type": "number" },
+        "enrollmentCount": { "type": "number" },
+        "enrollmentClosed": { "type": "boolean" },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "cancellationReason": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["scheduled", "in_progress", "completed", "cancelled"] },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["batchId", "batchNumber", "courseId", "trainerId", "venue", "startDate", "endDate", "capacity", "enrollmentCount", "status", "createdBy", "createdAt", "updatedAt"]
+    },
+    "Enrollment": {
+      "title": "Enrollment",
+      "description": "Candidate enrollment in a training batch within a tenant.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "enrollmentNumber": { "type": "string", "maxLength": 64, "pattern": "^[A-Z0-9\\-]+$" },
+        "candidateDocId": { "type": "string", "maxLength": 128 },
+        "candidateId": { "type": "string", "maxLength": 64 },
+        "candidateUserId": { "type": "string", "maxLength": 128 },
+        "organizationId": { "type": "string", "maxLength": 128 },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "batchId": { "type": "string", "maxLength": 128 },
+        "trainerId": { "type": "string", "maxLength": 128 },
+        "trainerUserId": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["pending", "confirmed", "in_progress", "completed", "failed", "cancelled", "withdrawn"] },
+        "trainerRecommended": { "type": "boolean" },
+        "trainerRecommendedBy": { "type": "string", "maxLength": 128 },
+        "completionApproved": { "type": "boolean" },
+        "completionApprovedBy": { "type": "string", "maxLength": 128 },
+        "trainingCardId": { "type": "string", "maxLength": 128 },
+        "certificateId": { "type": "string", "maxLength": 128 },
+        "capacityOverride": { "type": "boolean" },
+        "capacityOverrideReason": { "type": "string", "maxLength": 500 },
+        "capacityOverrideBy": { "type": "string", "maxLength": 128 },
+        "prerequisiteConfirmed": { "type": "boolean" },
+        "notes": { "type": "string", "maxLength": 500 },
+        "requestedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["enrollmentNumber", "candidateDocId", "candidateId", "courseId", "batchId", "status", "requestedBy", "createdAt", "updatedAt"]
+    },
+    "EnrollmentRequest": {
+      "title": "EnrollmentRequest",
+      "description": "Corporate client enrollment request within a tenant subject to administrator review.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "requestNumber": { "type": "string", "maxLength": 64, "pattern": "^[A-Z0-9\\-]+$" },
+        "organizationId": { "type": "string", "maxLength": 128 },
+        "organizationNameEn": { "type": "string", "maxLength": 200 },
+        "organizationNameAr": { "type": "string", "maxLength": 200 },
+        "candidateDocIds": { "type": "array" },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "preferredBatchId": { "type": "string", "maxLength": 128 },
+        "assignedBatchId": { "type": "string", "maxLength": 128 },
+        "requestNotes": { "type": "string", "maxLength": 1000 },
+        "missingInfoNotes": { "type": "string", "maxLength": 1000 },
+        "corporateResponseNotes": { "type": "string", "maxLength": 1000 },
+        "decisionReason": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["pending_review", "info_requested", "approved", "rejected"] },
+        "requestedBy": { "type": "string", "maxLength": 128 },
+        "requestedByName": { "type": "string", "maxLength": 160 },
+        "reviewedBy": { "type": "string", "maxLength": 128 },
+        "reviewedByName": { "type": "string", "maxLength": 160 },
+        "decisionDate": { "type": "string", "maxLength": 32 },
+        "createdEnrollmentIds": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["requestNumber", "organizationId", "candidateDocIds", "courseId", "status", "requestedBy", "createdAt", "updatedAt"]
+    },
+    "Attendance": {
+      "title": "Attendance",
+      "description": "Daily batch attendance record for an enrolled candidate within a tenant.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "batchId": { "type": "string", "maxLength": 128 },
+        "enrollmentId": { "type": "string", "maxLength": 128 },
+        "candidateDocId": { "type": "string", "maxLength": 128 },
+        "organizationId": { "type": "string", "maxLength": 128 },
+        "trainerUserId": { "type": "string", "maxLength": 128 },
+        "date": { "type": "string", "maxLength": 32 },
+        "status": { "type": "string", "enum": ["present", "absent", "late", "excused"] },
+        "remarks": { "type": "string", "maxLength": 400 },
+        "markedBy": { "type": "string", "maxLength": 128 },
+        "submissionStatus": { "type": "string", "enum": ["draft", "submitted"] },
+        "submittedAt": { "type": "string", "maxLength": 40 },
+        "submittedBy": { "type": "string", "maxLength": 128 },
+        "correctedBy": { "type": "string", "maxLength": 128 },
+        "correctionReason": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["batchId", "enrollmentId", "candidateDocId", "date", "status", "markedBy", "createdAt", "updatedAt"]
+    },
+    "Assessment": {
+      "title": "Assessment",
+      "description": "Examination and practical/oral assessment attempt record within a tenant.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "assessmentNumber": { "type": "string", "maxLength": 64 },
+        "enrollmentId": { "type": "string", "maxLength": 128 },
+        "candidateDocId": { "type": "string", "maxLength": 128 },
+        "organizationId": { "type": "string", "maxLength": 128 },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "batchId": { "type": "string", "maxLength": 128 },
+        "trainerUserId": { "type": "string", "maxLength": 128 },
+        "assessmentType": { "type": "string", "enum": ["written", "practical", "oral", "trainer_eval", "pass_fail"] },
+        "attemptNumber": { "type": "number" },
+        "maxMarks": { "type": "number" },
+        "obtainedMarks": { "type": "number" },
+        "percentage": { "type": "number" },
+        "passingScore": { "type": "number" },
+        "result": { "type": "string", "enum": ["pass", "fail"] },
+        "remarks": { "type": "string", "maxLength": 500 },
+        "assessorId": { "type": "string", "maxLength": 128 },
+        "assessorName": { "type": "string", "maxLength": 160 },
+        "assessmentDate": { "type": "string", "maxLength": 32 },
+        "assessmentStatus": { "type": "string", "enum": ["recorded", "pending_correction", "approved"] },
+        "correctionReason": { "type": "string", "maxLength": 500 },
+        "correctedMarks": { "type": "number" },
+        "correctedResult": { "type": "string", "enum": ["pass", "fail"] },
+        "correctionRequestedBy": { "type": "string", "maxLength": 128 },
+        "approvedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["enrollmentId", "candidateDocId", "courseId", "batchId", "assessmentType", "attemptNumber", "maxMarks", "obtainedMarks", "passingScore", "result", "assessorId", "assessmentDate", "createdAt"]
+    },
+    "TrainingCard": {
+      "title": "TrainingCard",
+      "description": "Auto-generated training card linked to a confirmed enrollment within a tenant.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "cardSerialNumber": { "type": "string", "maxLength": 64 },
+        "enrollmentId": { "type": "string", "maxLength": 128 },
+        "candidateDocId": { "type": "string", "maxLength": 128 },
+        "candidateId": { "type": "string", "maxLength": 64 },
+        "candidateUserId": { "type": "string", "maxLength": 128 },
+        "organizationId": { "type": "string", "maxLength": 128 },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "batchId": { "type": "string", "maxLength": 128 },
+        "templateId": { "type": "string", "maxLength": 128 },
+        "templateName": { "type": "string", "maxLength": 160 },
+        "templateVersion": { "type": "number" },
+        "qrTokenHash": { "type": "string", "maxLength": 128 },
+        "pdfFileId": { "type": "string", "maxLength": 256 },
+        "version": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "superseded", "revoked"] },
+        "snapshot": { "type": "object" },
+        "generatedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["cardSerialNumber", "enrollmentId", "candidateDocId", "candidateId", "courseId", "batchId", "qrTokenHash", "pdfFileId", "version", "status", "generatedBy", "createdAt"]
+    },
+    "Certificate": {
+      "title": "Certificate",
+      "description": "Issued professional training certificate within a tenant with immutable historical snapshot and verification hash.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "certificateNumber": { "type": "string", "maxLength": 64 },
+        "enrollmentId": { "type": "string", "maxLength": 128 },
+        "candidateDocId": { "type": "string", "maxLength": 128 },
+        "candidateId": { "type": "string", "maxLength": 64 },
+        "candidateUserId": { "type": "string", "maxLength": 128 },
+        "organizationId": { "type": "string", "maxLength": 128 },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "batchId": { "type": "string", "maxLength": 128 },
+        "templateId": { "type": "string", "maxLength": 128 },
+        "templateVersion": { "type": "number" },
+        "tokenHash": { "type": "string", "maxLength": 128 },
+        "pdfFileId": { "type": "string", "maxLength": 256 },
+        "issueDate": { "type": "string", "maxLength": 32 },
+        "completionDate": { "type": "string", "maxLength": 32 },
+        "expiryDate": { "type": "string", "maxLength": 32 },
+        "status": { "type": "string", "enum": ["valid", "expired", "revoked", "superseded"] },
+        "revocationReason": { "type": "string", "maxLength": 500 },
+        "revokedBy": { "type": "string", "maxLength": 128 },
+        "supersededBy": { "type": "string", "maxLength": 64 },
+        "issuedBy": { "type": "string", "maxLength": 128 },
+        "snapshot": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["certificateNumber", "enrollmentId", "candidateDocId", "candidateId", "courseId", "batchId", "tokenHash", "pdfFileId", "issueDate", "completionDate", "status", "issuedBy", "createdAt", "updatedAt"]
+    },
+    "PublicVerification": {
+      "title": "PublicVerification",
+      "description": "Zero-PII public lookup record for certificate QR and number verification with tenant attribution.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "lookupKey": { "type": "string", "maxLength": 128 },
+        "certificateNumber": { "type": "string", "maxLength": 64 },
+        "candidateNameEn": { "type": "string", "maxLength": 200 },
+        "candidateNameAr": { "type": "string", "maxLength": 200 },
+        "courseTitleEn": { "type": "string", "maxLength": 220 },
+        "courseTitleAr": { "type": "string", "maxLength": 220 },
+        "completionDate": { "type": "string", "maxLength": 32 },
+        "issueDate": { "type": "string", "maxLength": 32 },
+        "expiryDate": { "type": "string", "maxLength": 32 },
+        "issuingCenterEn": { "type": "string", "maxLength": 200 },
+        "issuingCenterAr": { "type": "string", "maxLength": 200 },
+        "status": { "type": "string", "enum": ["valid", "expired", "revoked", "superseded"] },
+        "supersededBy": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["lookupKey", "certificateNumber", "candidateNameEn", "courseTitleEn", "completionDate", "issueDate", "issuingCenterEn", "status", "updatedAt"]
+    },
+    "CertificateTemplate": {
+      "title": "CertificateTemplate",
+      "description": "Configurable common or course-specific certificate PDF layout template per tenant.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 160 },
+        "scope": { "type": "string", "enum": ["common", "course"] },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "orientation": { "type": "string", "enum": ["landscape", "portrait"] },
+        "languageMode": { "type": "string", "enum": ["bilingual", "en", "ar"] },
+        "version": { "type": "number" },
+        "isDefault": { "type": "boolean" },
+        "isActive": { "type": "boolean" },
+        "config": { "type": "object" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "scope", "orientation", "version", "isDefault", "config", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "CardTemplate": {
+      "title": "CardTemplate",
+      "description": "Configurable common or course-specific training card PDF layout template per tenant.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 160 },
+        "scope": { "type": "string", "enum": ["common", "course"] },
+        "courseId": { "type": "string", "maxLength": 128 },
+        "languageMode": { "type": "string", "enum": ["bilingual", "en", "ar"] },
+        "widthMm": { "type": "number" },
+        "heightMm": { "type": "number" },
+        "version": { "type": "number" },
+        "isDefault": { "type": "boolean" },
+        "isActive": { "type": "boolean" },
+        "config": { "type": "object" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "scope", "widthMm", "heightMm", "version", "isDefault", "config", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "CompanySettings": {
+      "title": "CompanySettings",
+      "description": "Tenant training center branding, legal identity, stamp, signature, and colors.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "nameEn": { "type": "string", "maxLength": 200 },
+        "nameAr": { "type": "string", "maxLength": 200 },
+        "legalName": { "type": "string", "maxLength": 240 },
+        "crNumber": { "type": "string", "maxLength": 64 },
+        "address": { "type": "string", "maxLength": 400 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "email": { "type": "string", "maxLength": 200 },
+        "website": { "type": "string", "maxLength": 200 },
+        "logoFileId": { "type": "string", "maxLength": 256 },
+        "stampFileId": { "type": "string", "maxLength": 256 },
+        "signatoryName": { "type": "string", "maxLength": 160 },
+        "signatureFileId": { "type": "string", "maxLength": 256 },
+        "primaryColor": { "type": "string", "maxLength": 16 },
+        "secondaryColor": { "type": "string", "maxLength": 16 },
+        "certificateFooter": { "type": "string", "maxLength": 400 },
+        "cardFooter": { "type": "string", "maxLength": 400 },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["nameEn", "nameAr", "primaryColor", "secondaryColor", "updatedBy", "updatedAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "Tenant-scoped role- and user-targeted operational notifications.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "targetUserId": { "type": "string", "maxLength": 128 },
+        "targetRole": { "type": "string", "maxLength": 64 },
+        "organizationId": { "type": "string", "maxLength": 128 },
+        "type": { "type": "string", "maxLength": 64 },
+        "category": { "type": "string", "maxLength": 64 },
+        "channel": { "type": "string", "enum": ["in_app", "email", "whatsapp", "whatsapp_manual"] },
+        "deliveryStatus": { "type": "string", "enum": ["pending", "queued", "sent", "delivered", "failed", "retry_required", "manual_initiated"] },
+        "recipient": { "type": "string", "maxLength": 200 },
+        "candidateDocId": { "type": "string", "maxLength": 128 },
+        "candidateId": { "type": "string", "maxLength": 64 },
+        "enrollmentId": { "type": "string", "maxLength": 128 },
+        "trainingCardId": { "type": "string", "maxLength": 128 },
+        "certificateId": { "type": "string", "maxLength": 128 },
+        "attachmentFileId": { "type": "string", "maxLength": 256 },
+        "titleEn": { "type": "string", "maxLength": 200 },
+        "titleAr": { "type": "string", "maxLength": 200 },
+        "bodyEn": { "type": "string", "maxLength": 1000 },
+        "bodyAr": { "type": "string", "maxLength": 1000 },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["type", "titleEn", "titleAr", "bodyEn", "bodyAr", "read", "createdAt"]
+    },
+    "MessageTemplate": {
+      "title": "MessageTemplate",
+      "description": "Tenant-scoped bilingual English & Arabic notification and WhatsApp/Email template.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "code": { "type": "string", "maxLength": 80 },
+        "category": { "type": "string", "enum": ["candidate_registration", "enrollment_confirmation", "training_schedule", "training_reminder", "training_card_delivery", "attendance_notification", "examination_schedule", "examination_result", "certificate_issuance", "certificate_pdf_delivery", "certificate_expiry_reminder"] },
+        "nameEn": { "type": "string", "maxLength": 200 },
+        "nameAr": { "type": "string", "maxLength": 200 },
+        "subjectEn": { "type": "string", "maxLength": 240 },
+        "subjectAr": { "type": "string", "maxLength": 240 },
+        "bodyEn": { "type": "string", "maxLength": 3000 },
+        "bodyAr": { "type": "string", "maxLength": 3000 },
+        "whatsappTemplateName": { "type": "string", "maxLength": 160 },
+        "whatsappLanguageEn": { "type": "string", "maxLength": 24 },
+        "whatsappLanguageAr": { "type": "string", "maxLength": 24 },
+        "useApprovedMetaTemplate": { "type": "boolean" },
+        "placeholders": { "type": "array" },
+        "isActive": { "type": "boolean" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "category", "nameEn", "nameAr", "subjectEn", "subjectAr", "bodyEn", "bodyAr", "isActive", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "ImportJob": {
+      "title": "ImportJob",
+      "description": "Tenant-scoped Excel bulk import summary, uploader metadata, status, and audit trail.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "jobId": { "type": "string", "maxLength": 64, "pattern": "^[A-Z0-9\\-]+$" },
+        "importType": { "type": "string", "enum": ["candidates", "corporate_employees", "enrollment_requests", "enrollments", "attendance", "courses", "trainers"] },
+        "organizationId": { "type": "string", "maxLength": 128 },
+        "fileName": { "type": "string", "maxLength": 255 },
+        "uploadedByName": { "type": "string", "maxLength": 160 },
+        "uploadedByEmail": { "type": "string", "maxLength": 200 },
+        "totalRows": { "type": "number" },
+        "importedCount": { "type": "number" },
+        "updatedCount": { "type": "number" },
+        "duplicateCount": { "type": "number" },
+        "invalidCount": { "type": "number" },
+        "skippedCount": { "type": "number" },
+        "failedCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["completed", "completed_with_errors", "failed", "cancelled"] },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["jobId", "importType", "fileName", "totalRows", "importedCount", "duplicateCount", "invalidCount", "skippedCount", "failedCount", "status", "createdBy", "createdAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable tenant-scoped system audit trail entry.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "actorUid": { "type": "string", "maxLength": 128 },
+        "actorEmail": { "type": "string", "maxLength": 200 },
+        "actorRole": { "type": "string", "maxLength": 64 },
+        "action": { "type": "string", "maxLength": 120 },
+        "entityType": { "type": "string", "maxLength": 80 },
+        "entityId": { "type": "string", "maxLength": 128 },
+        "details": { "type": "string", "maxLength": 2000 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["actorUid", "actorRole", "action", "entityType", "entityId", "createdAt"]
+    },
+    "VerificationLog": {
+      "title": "VerificationLog",
+      "description": "Audit log of public and internal certificate verification requests within a tenant.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "mode": { "type": "string", "enum": ["public", "internal"] },
+        "query": { "type": "string", "maxLength": 200 },
+        "resultStatus": { "type": "string", "maxLength": 64 },
+        "certificateNumber": { "type": "string", "maxLength": 64 },
+        "actorUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["mode", "query", "resultStatus", "createdAt"]
+    },
+    "DeliveryLog": {
+      "title": "DeliveryLog",
+      "description": "Tenant-scoped tracking record for Email, WhatsApp, and in-app notification deliveries.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "channel": { "type": "string", "enum": ["in_app", "email", "whatsapp", "whatsapp_manual"] },
+        "recipient": { "type": "string", "maxLength": 200 },
+        "recipientName": { "type": "string", "maxLength": 200 },
+        "messageType": { "type": "string", "maxLength": 80 },
+        "category": { "type": "string", "maxLength": 80 },
+        "templateId": { "type": "string", "maxLength": 128 },
+        "language": { "type": "string", "enum": ["en", "ar", "bilingual"] },
+        "titleEn": { "type": "string", "maxLength": 240 },
+        "titleAr": { "type": "string", "maxLength": 240 },
+        "messagePreview": { "type": "string", "maxLength": 2000 },
+        "providerMessageId": { "type": "string", "maxLength": 200 },
+        "deliveryStatus": { "type": "string", "enum": ["pending", "queued", "sent", "delivered", "failed", "retry_required", "manual_initiated"] },
+        "failureReason": { "type": "string", "maxLength": 500 },
+        "providerStatusDetails": { "type": "string", "maxLength": 500 },
+        "entityId": { "type": "string", "maxLength": 128 },
+        "candidateDocId": { "type": "string", "maxLength": 128 },
+        "candidateId": { "type": "string", "maxLength": 64 },
+        "enrollmentId": { "type": "string", "maxLength": 128 },
+        "trainingCardId": { "type": "string", "maxLength": 128 },
+        "certificateId": { "type": "string", "maxLength": 128 },
+        "organizationId": { "type": "string", "maxLength": 128 },
+        "attachmentFileId": { "type": "string", "maxLength": 256 },
+        "manualUrl": { "type": "string", "maxLength": 2000 },
+        "retryCount": { "type": "number" },
+        "lastRetryAt": { "type": "string", "maxLength": 40 },
+        "deliveredAt": { "type": "string", "maxLength": 40 },
+        "sentBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["channel", "recipient", "messageType", "deliveryStatus", "sentBy", "createdAt"]
+    },
+    "SystemSettings": {
+      "title": "SystemSettings",
+      "description": "Tenant-scoped system configuration, categories, retention policies, and encrypted integration configs.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "key": { "type": "string", "maxLength": 64 },
+        "config": { "type": "object" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["key", "config", "updatedBy", "updatedAt"]
+    },
+    "Counter": {
+      "title": "Counter",
+      "description": "Tenant-scoped atomic business identifier sequence counter.",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "prefix": { "type": "string", "maxLength": 32 },
+        "value": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["prefix", "value", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/saasTenants/{tenantId}": {
+      "schema": { "$ref": "#/entities/SaasTenant" },
+      "description": "Registered SaaS training company tenant workspaces"
+    },
+    "/saasUsers/{userId}": {
+      "schema": { "$ref": "#/entities/SaasUser" },
+      "description": "Global SaaS user identity and platform role directory"
+    },
+    "/tenantMemberships/{membershipId}": {
+      "schema": { "$ref": "#/entities/TenantMembership" },
+      "description": "Tenant-scoped user memberships and roles"
+    },
+    "/platformSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/PlatformSettings" },
+      "description": "Platform-wide SaaS configuration and public landing settings"
+    },
+    "/subscriptionPlans/{planId}": {
+      "schema": { "$ref": "#/entities/SubscriptionPlan" },
+      "description": "Publicly readable active SaaS subscription pricing plans"
+    },
+    "/platformLeads/{leadId}": {
+      "schema": { "$ref": "#/entities/PlatformLead" },
+      "description": "Public sales and support contact inquiries"
+    },
+    "/pendingTenantRegistrations/{regId}": {
+      "schema": { "$ref": "#/entities/PendingTenantRegistration" },
+      "description": "Pending self-service tenant registrations awaiting email verification"
+    },
+    "/platformAuditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/PlatformAuditLog" },
+      "description": "Immutable platform administration and tenant migration audit logs"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles and tenant role assignments"
+    },
+    "/userInvites/{inviteId}": {
+      "schema": { "$ref": "#/entities/UserInvite" },
+      "description": "Pre-assigned tenant user role invitations keyed by email hash"
+    },
+    "/candidates/{candidateDocId}": {
+      "schema": { "$ref": "#/entities/Candidate" },
+      "description": "Registered trainee candidates scoped by tenantId"
+    },
+    "/candidateDocuments/{docId}": {
+      "schema": { "$ref": "#/entities/CandidateDocument" },
+      "description": "Private candidate identity document metadata scoped by tenantId"
+    },
+    "/identityHashes/{hashKey}": {
+      "schema": { "$ref": "#/entities/IdentityHash" },
+      "description": "Tenant-scoped keyed identity hashes for duplicate Iqama/Passport detection"
+    },
+    "/organizations/{organizationId}": {
+      "schema": { "$ref": "#/entities/Organization" },
+      "description": "Corporate client organizations scoped by tenantId"
+    },
+    "/organizationUsers/{orgUserId}": {
+      "schema": { "$ref": "#/entities/OrganizationUser" },
+      "description": "Corporate user memberships scoped by tenantId"
+    },
+    "/courses/{courseId}": {
+      "schema": { "$ref": "#/entities/Course" },
+      "description": "Training course catalog scoped by tenantId"
+    },
+    "/trainers/{trainerId}": {
+      "schema": { "$ref": "#/entities/Trainer" },
+      "description": "Trainer registry scoped by tenantId"
+    },
+    "/batches/{batchId}": {
+      "schema": { "$ref": "#/entities/Batch" },
+      "description": "Scheduled training batches scoped by tenantId"
+    },
+    "/enrollments/{enrollmentId}": {
+      "schema": { "$ref": "#/entities/Enrollment" },
+      "description": "Candidate course batch enrollments scoped by tenantId"
+    },
+    "/enrollmentRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/EnrollmentRequest" },
+      "description": "Corporate client course enrollment requests scoped by tenantId"
+    },
+    "/attendance/{attendanceId}": {
+      "schema": { "$ref": "#/entities/Attendance" },
+      "description": "Batch attendance records scoped by tenantId"
+    },
+    "/assessments/{assessmentId}": {
+      "schema": { "$ref": "#/entities/Assessment" },
+      "description": "Written and practical assessment attempts scoped by tenantId"
+    },
+    "/trainingCards/{cardId}": {
+      "schema": { "$ref": "#/entities/TrainingCard" },
+      "description": "Generated training cards scoped by tenantId"
+    },
+    "/certificates/{certificateId}": {
+      "schema": { "$ref": "#/entities/Certificate" },
+      "description": "Issued certificates scoped by tenantId"
+    },
+    "/publicVerifications/{lookupKey}": {
+      "schema": { "$ref": "#/entities/PublicVerification" },
+      "description": "Zero-PII public certificate verification lookup records"
+    },
+    "/certificateTemplates/{templateId}": {
+      "schema": { "$ref": "#/entities/CertificateTemplate" },
+      "description": "Common and course-specific certificate templates scoped by tenantId"
+    },
+    "/cardTemplates/{templateId}": {
+      "schema": { "$ref": "#/entities/CardTemplate" },
+      "description": "Common and course-specific training card templates scoped by tenantId"
+    },
+    "/companySettings/{settingId}": {
+      "schema": { "$ref": "#/entities/CompanySettings" },
+      "description": "Tenant company branding and footer configuration"
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/Notification" },
+      "description": "Role- and user-targeted notifications scoped by tenantId"
+    },
+    "/messageTemplates/{templateId}": {
+      "schema": { "$ref": "#/entities/MessageTemplate" },
+      "description": "Bilingual English and Arabic WhatsApp and Email message templates scoped by tenantId"
+    },
+    "/importJobs/{jobId}": {
+      "schema": { "$ref": "#/entities/ImportJob" },
+      "description": "Excel bulk import summaries scoped by tenantId"
+    },
+    "/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable system audit logs scoped by tenantId"
+    },
+    "/verificationLogs/{logId}": {
+      "schema": { "$ref": "#/entities/VerificationLog" },
+      "description": "Public and internal verification logs scoped by tenantId"
+    },
+    "/deliveryLogs/{logId}": {
+      "schema": { "$ref": "#/entities/DeliveryLog" },
+      "description": "Email and WhatsApp delivery tracking logs scoped by tenantId"
+    },
+    "/systemSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/SystemSettings" },
+      "description": "Tenant-scoped system configuration, integrations, and permission matrix"
+    },
+    "/counters/{counterId}": {
+      "schema": { "$ref": "#/entities/Counter" },
+      "description": "Tenant-scoped atomic business ID sequence counters"
+    }
+  }
+}

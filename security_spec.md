@@ -1,0 +1,30 @@
+# TCMS Multi-Tenant SaaS Firestore Security Specification (Phase 1)
+
+## 1. Data Invariants
+1. **Self-Assigned Role & Platform Role Prevention**: A newly created `users/{uid}` or `saasUsers/{uid}` document cannot assign itself `super_admin`, `tenant_owner`, `admin`, `tenant_admin`, `certificate_officer`, `trainer`, `corporate_client`, or any `platformRole` unless the verified authenticated email matches the bootstrapped owner (`dr.aamir01@gmail.com`), an existing `platform_super_admin` authorizes it, or a matching verified `userInvites` record (`hashEmailKey` or `hashTenantEmailKey`) exists with `status == 'pending'`.
+2. **Strict Tenant Isolation**: Every tenant-scoped business collection (`candidates`, `candidateDocuments`, `identityHashes`, `organizations`, `organizationUsers`, `courses`, `trainers`, `batches`, `enrollments`, `enrollmentRequests`, `attendance`, `assessments`, `trainingCards`, `certificates`, `certificateTemplates`, `cardTemplates`, `companySettings`, `notifications`, `messageTemplates`, `importJobs`, `auditLogs`, `verificationLogs`, `deliveryLogs`, `systemSettings`, `counters`) restricts reads and writes to the caller's active `tenantId` (or `tenantMemberships/{tenantId}__{uid}`), with bounded pre-migration fallback for untagged legacy documents belonging to `tenant_default`.
+3. **Platform Super Admin Governance**: Only verified `platform_super_admin` users may create non-default `saasTenants`, update/suspend tenants, manage `platformSettings`, read `platformAuditLogs`, or execute legacy `tenantId` backfill migrations.
+4. **Corporate Organization Isolation**: Within a tenant, a `corporate_client` user may only read/create/list candidates, enrollments, attendance, training cards, and certificates where both `tenantId` and `organizationId` match their own bound profile/membership.
+5. **Candidate Self-Isolation**: Within a tenant, a `candidate` user may only read their own `candidates`, `enrollments`, `trainingCards`, and `certificates` where `userId` / `candidateUserId == request.auth.uid`, and cannot list other candidates or modify grades/attendance/certificates.
+6. **Certificate Issuance Integrity**: Only `platform_super_admin`, `super_admin`, `tenant_owner`, or `certificate_officer` belonging to the active tenant may create, reissue, or revoke `certificates` and update `publicVerifications`. Trainers and Candidates cannot issue or alter certificates.
+7. **PII & Public Verification Isolation**: `publicVerifications` contains zero PII (no Iqama, passport, phone, email, or photo) and disallows `list` queries (`allow list: if false`) so the public verification page can only look up exact certificate numbers or verification token hashes.
+8. **Temporal Integrity & Path Hardening**: Single-document IDs match `^[a-zA-Z0-9_\-]+$` (length `<= 160`), and standard `createdAt`/`updatedAt` mutations enforce `request.time`.
+9. **Immutable Audit & Platform Trail**: `auditLogs`, `verificationLogs`, and `platformAuditLogs` cannot be modified or deleted by any tenant or client role (except the one-time additive `tenantId: 'tenant_default'` backfill by `platform_super_admin` on untagged legacy logs).
+
+## 2. Adversarial Payloads (Dirty Dozen + Multi-Tenant SaaS Additions)
+1. **Privilege Escalation on Signup**: Non-admin user attempts `CREATE /users/{uid}` with `role: "super_admin"` or `"tenant_owner"` or `platformRole: "platform_super_admin"`. -> Expect `PERMISSION_DENIED`.
+2. **Role Self-Upgrade via Profile Update**: Existing `candidate` user attempts `UPDATE /users/{uid}` changing `role` to `"certificate_officer"` or `platformRole` to `"platform_super_admin"`. -> Expect `PERMISSION_DENIED`.
+3. **Ghost Field Injection (Shadow Update)**: Tenant admin attempts `CREATE /candidates/{id}` with unapproved field `isBypassed: true`. -> Expect `PERMISSION_DENIED`.
+4. **Unverified Email Bypass**: User with `email_verified: false` attempts to write to `candidates`. -> Expect `PERMISSION_DENIED`.
+5. **Cross-Tenant Organization Read**: `corporate_client` belonging to `ORG-0001` in `tenant_default` attempts `GET /candidates/cand_org2` belonging to `ORG-0002`. -> Expect `PERMISSION_DENIED`.
+6. **Cross-Tenant Corporate List Scrape**: `corporate_client` attempts `LIST /candidates` without matching `organizationId`. -> Expect `PERMISSION_DENIED`.
+7. **Candidate Unauthorized Certificate Issuance**: `candidate` or `trainer` attempts `CREATE /certificates/cert_fake`. -> Expect `PERMISSION_DENIED`.
+8. **Audit Log Tampering**: Even `admin` or `tenant_admin` attempts `UPDATE` or `DELETE` on `auditLogs/{logId}` or `platformAuditLogs/{logId}`. -> Expect `PERMISSION_DENIED`.
+9. **Public Verification Scraping**: Unauthenticated user attempts `LIST /publicVerifications`. -> Expect `PERMISSION_DENIED`.
+10. **ID Poisoning Attack**: Attacker sends document ID exceeding 160 chars or containing `../` path traversal. -> Expect `PERMISSION_DENIED`.
+11. **Timestamp Forgery**: Tenant admin attempts `CREATE /courses/crs_1` with backdated `createdAt: "2020-01-01T00:00:00Z"` instead of `request.time`. -> Expect `PERMISSION_DENIED`.
+12. **System Settings Secret Exfiltration**: `trainer`, `corporate_client`, or `candidate` attempts `GET /systemSettings/integrations` (SMTP/WhatsApp credentials). -> Expect `PERMISSION_DENIED`.
+13. **Cross-Tenant Business Record Read**: `tenant_owner` of `ten_alpha` attempts `GET /candidates/cand_beta` stamped with `tenantId: "ten_beta"`. -> Expect `PERMISSION_DENIED`.
+14. **Cross-Tenant Write Forgery**: `tenant_admin` of `ten_alpha` attempts `CREATE /courses/crs_hijack` stamped with `tenantId: "ten_beta"`. -> Expect `PERMISSION_DENIED`.
+15. **Unauthorized SaaS Tenant Provisioning**: `tenant_owner` (non-platform admin) attempts `CREATE /saasTenants/ten_rogue` or `UPDATE /platformSettings/plans`. -> Expect `PERMISSION_DENIED`.
+16. **Unauthorized Membership Forgery**: Authenticated user attempts `CREATE /tenantMemberships/ten_beta__attacker` assigning themselves `role: "tenant_owner"`. -> Expect `PERMISSION_DENIED`.

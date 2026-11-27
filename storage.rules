@@ -1,0 +1,240 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null
+        && request.auth.token.email_verified == true;
+    }
+
+    function userDoc() {
+      return firestore.get(/databases/ai-studio-af1aca56-5e67-4645-84e7-4b40da9143cc/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isActiveUser() {
+      return isSignedIn() && userDoc().status == 'active';
+    }
+
+    function role() {
+      return userDoc().role;
+    }
+
+    function userTenantId() {
+      return ('tenantId' in userDoc() && userDoc().tenantId is string) ? userDoc().tenantId : 'tenant_default';
+    }
+
+    function isPlatformSuperAdmin() {
+      return isActiveUser() && ('platformRole' in userDoc() && userDoc().platformRole == 'platform_super_admin');
+    }
+
+    function metaMatchesTenant(meta) {
+      return isPlatformSuperAdmin()
+        || (meta != null && 'tenantId' in meta && meta.tenantId == userTenantId())
+        || ((meta == null || !('tenantId' in meta)) && userTenantId() == 'tenant_default');
+    }
+
+    function isSuperOrAdmin() {
+      return isActiveUser() && (role() in ['super_admin', 'tenant_owner', 'admin', 'tenant_admin']);
+    }
+
+    function isStaffCertManager() {
+      return isActiveUser() && (role() in ['super_admin', 'tenant_owner', 'admin', 'tenant_admin', 'certificate_officer']);
+    }
+
+    function allowedContentType() {
+      return request.resource.contentType.matches('application/pdf')
+        || request.resource.contentType.matches('image/(png|jpeg|jpg|webp)')
+        || request.resource.contentType.matches('application/vnd\\.openxmlformats-officedocument\\.spreadsheetml\\.sheet')
+        || request.resource.contentType.matches('text/csv');
+    }
+
+    function withinMaxSize(maxMb) {
+      return request.resource.size > 0 && request.resource.size <= maxMb * 1024 * 1024;
+    }
+
+    // Tenant-prefixed Storage objects (Phase 1+ SaaS canonical paths)
+    match /tenants/{tenantId}/branding/{fileId} {
+      allow read: if (resource.metadata != null && resource.metadata.isPublicBranding == 'true')
+        || (isActiveUser() && (isPlatformSuperAdmin() || tenantId == userTenantId()));
+      allow create, update: if isSuperOrAdmin()
+        && (isPlatformSuperAdmin() || tenantId == userTenantId())
+        && withinMaxSize(5)
+        && allowedContentType()
+        && request.resource.metadata.uploadedBy == request.auth.uid
+        && request.resource.metadata.tenantId == tenantId;
+      allow delete: if isSuperOrAdmin() && (isPlatformSuperAdmin() || tenantId == userTenantId());
+    }
+
+    match /tenants/{tenantId}/candidate_doc/{fileId} {
+      allow read: if isActiveUser()
+        && (isPlatformSuperAdmin() || tenantId == userTenantId())
+        && (
+          isStaffCertManager()
+          || (role() == 'corporate_client' && resource.metadata.organizationId == userDoc().organizationId)
+          || (role() == 'candidate' && resource.metadata.candidateUserId == request.auth.uid)
+        );
+      allow create, update: if isActiveUser()
+        && (isPlatformSuperAdmin() || tenantId == userTenantId())
+        && (
+          isStaffCertManager()
+          || (role() == 'corporate_client' && request.resource.metadata.organizationId == userDoc().organizationId)
+        )
+        && withinMaxSize(5)
+        && (request.resource.contentType.matches('application/pdf') || request.resource.contentType.matches('image/(png|jpeg|jpg)'))
+        && request.resource.metadata.uploadedBy == request.auth.uid
+        && request.resource.metadata.tenantId == tenantId;
+      allow delete: if isSuperOrAdmin() && (isPlatformSuperAdmin() || tenantId == userTenantId());
+    }
+
+    match /tenants/{tenantId}/course_doc/{fileId} {
+      allow read: if isActiveUser() && (isPlatformSuperAdmin() || tenantId == userTenantId());
+      allow create, update: if isSuperOrAdmin()
+        && (isPlatformSuperAdmin() || tenantId == userTenantId())
+        && withinMaxSize(5)
+        && allowedContentType()
+        && request.resource.metadata.tenantId == tenantId;
+      allow delete: if isSuperOrAdmin() && (isPlatformSuperAdmin() || tenantId == userTenantId());
+    }
+
+    match /tenants/{tenantId}/trainer_doc/{fileId} {
+      allow read: if isActiveUser()
+        && (isPlatformSuperAdmin() || tenantId == userTenantId())
+        && (isSuperOrAdmin() || role() == 'trainer');
+      allow create, update: if isSuperOrAdmin()
+        && (isPlatformSuperAdmin() || tenantId == userTenantId())
+        && withinMaxSize(5)
+        && allowedContentType()
+        && request.resource.metadata.tenantId == tenantId;
+      allow delete: if isSuperOrAdmin() && (isPlatformSuperAdmin() || tenantId == userTenantId());
+    }
+
+    match /tenants/{tenantId}/training_card/{fileId} {
+      allow read: if isActiveUser()
+        && (isPlatformSuperAdmin() || tenantId == userTenantId())
+        && (
+          isStaffCertManager()
+          || role() == 'trainer'
+          || (role() == 'corporate_client' && resource.metadata.organizationId == userDoc().organizationId)
+          || (role() == 'candidate' && resource.metadata.candidateUserId == request.auth.uid)
+        );
+      allow create, update: if isStaffCertManager()
+        && (isPlatformSuperAdmin() || tenantId == userTenantId())
+        && withinMaxSize(10)
+        && request.resource.contentType == 'application/pdf'
+        && request.resource.metadata.tenantId == tenantId;
+      allow delete: if isSuperOrAdmin() && (isPlatformSuperAdmin() || tenantId == userTenantId());
+    }
+
+    match /tenants/{tenantId}/certificate/{fileId} {
+      allow read: if isActiveUser()
+        && (isPlatformSuperAdmin() || tenantId == userTenantId())
+        && (
+          isStaffCertManager()
+          || (role() == 'corporate_client' && resource.metadata.organizationId == userDoc().organizationId)
+          || (role() == 'candidate' && resource.metadata.candidateUserId == request.auth.uid)
+        );
+      allow create, update: if isStaffCertManager()
+        && (isPlatformSuperAdmin() || tenantId == userTenantId())
+        && withinMaxSize(10)
+        && request.resource.contentType == 'application/pdf'
+        && request.resource.metadata.tenantId == tenantId;
+      allow delete: if isSuperOrAdmin() && (isPlatformSuperAdmin() || tenantId == userTenantId());
+    }
+
+    match /tenants/{tenantId}/report/{fileId} {
+      allow read: if isActiveUser()
+        && (isPlatformSuperAdmin() || tenantId == userTenantId())
+        && (
+          isStaffCertManager()
+          || (role() == 'corporate_client' && resource.metadata.organizationId == userDoc().organizationId)
+        );
+      allow create, update: if isStaffCertManager()
+        && (isPlatformSuperAdmin() || tenantId == userTenantId())
+        && withinMaxSize(10)
+        && allowedContentType()
+        && request.resource.metadata.tenantId == tenantId;
+      allow delete: if isSuperOrAdmin() && (isPlatformSuperAdmin() || tenantId == userTenantId());
+    }
+
+    // Legacy paths preserved cleanly for tenant_default backward compatibility
+    match /tcms/branding/{fileId} {
+      allow read: if (resource.metadata != null && resource.metadata.isPublicBranding == 'true')
+        || (isActiveUser() && metaMatchesTenant(resource.metadata));
+      allow create, update: if isSuperOrAdmin()
+        && metaMatchesTenant(request.resource.metadata)
+        && withinMaxSize(5)
+        && allowedContentType()
+        && request.resource.metadata.uploadedBy == request.auth.uid;
+      allow delete: if isSuperOrAdmin() && metaMatchesTenant(resource.metadata);
+    }
+
+    match /tcms/candidate_doc/{fileId} {
+      allow read: if isActiveUser() && metaMatchesTenant(resource.metadata) && (
+        isStaffCertManager()
+        || (role() == 'corporate_client' && resource.metadata.organizationId == userDoc().organizationId)
+        || (role() == 'candidate' && resource.metadata.candidateUserId == request.auth.uid)
+      );
+      allow create, update: if isActiveUser() && metaMatchesTenant(request.resource.metadata) && (
+        isStaffCertManager()
+        || (role() == 'corporate_client' && request.resource.metadata.organizationId == userDoc().organizationId)
+      )
+      && withinMaxSize(5)
+      && (request.resource.contentType.matches('application/pdf') || request.resource.contentType.matches('image/(png|jpeg|jpg)'))
+      && request.resource.metadata.uploadedBy == request.auth.uid;
+      allow delete: if isSuperOrAdmin() && metaMatchesTenant(resource.metadata);
+    }
+
+    match /tcms/course_doc/{fileId} {
+      allow read: if isActiveUser() && metaMatchesTenant(resource.metadata);
+      allow create, update: if isSuperOrAdmin() && metaMatchesTenant(request.resource.metadata) && withinMaxSize(5) && allowedContentType();
+      allow delete: if isSuperOrAdmin() && metaMatchesTenant(resource.metadata);
+    }
+
+    match /tcms/trainer_doc/{fileId} {
+      allow read: if isActiveUser() && metaMatchesTenant(resource.metadata) && (isSuperOrAdmin() || role() == 'trainer');
+      allow create, update: if isSuperOrAdmin() && metaMatchesTenant(request.resource.metadata) && withinMaxSize(5) && allowedContentType();
+      allow delete: if isSuperOrAdmin() && metaMatchesTenant(resource.metadata);
+    }
+
+    match /tcms/training_card/{fileId} {
+      allow read: if isActiveUser() && metaMatchesTenant(resource.metadata) && (
+        isStaffCertManager()
+        || role() == 'trainer'
+        || (role() == 'corporate_client' && resource.metadata.organizationId == userDoc().organizationId)
+        || (role() == 'candidate' && resource.metadata.candidateUserId == request.auth.uid)
+      );
+      allow create, update: if isStaffCertManager()
+        && metaMatchesTenant(request.resource.metadata)
+        && withinMaxSize(10)
+        && request.resource.contentType == 'application/pdf';
+      allow delete: if isSuperOrAdmin() && metaMatchesTenant(resource.metadata);
+    }
+
+    match /tcms/certificate/{fileId} {
+      allow read: if isActiveUser() && metaMatchesTenant(resource.metadata) && (
+        isStaffCertManager()
+        || (role() == 'corporate_client' && resource.metadata.organizationId == userDoc().organizationId)
+        || (role() == 'candidate' && resource.metadata.candidateUserId == request.auth.uid)
+      );
+      allow create, update: if isStaffCertManager()
+        && metaMatchesTenant(request.resource.metadata)
+        && withinMaxSize(10)
+        && request.resource.contentType == 'application/pdf';
+      allow delete: if isSuperOrAdmin() && metaMatchesTenant(resource.metadata);
+    }
+
+    match /tcms/report/{fileId} {
+      allow read: if isActiveUser() && metaMatchesTenant(resource.metadata) && (
+        isStaffCertManager()
+        || (role() == 'corporate_client' && resource.metadata.organizationId == userDoc().organizationId)
+      );
+      allow create, update: if isStaffCertManager() && metaMatchesTenant(request.resource.metadata) && withinMaxSize(10) && allowedContentType();
+      allow delete: if isSuperOrAdmin() && metaMatchesTenant(resource.metadata);
+    }
+
+    // Default deny for everything else
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

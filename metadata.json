@@ -1,0 +1,6 @@
+{
+  "name": "TCMS Enterprise",
+  "description": "Complete bilingual Training Center Management System for Saudi Arabian training operations, covering candidates, corporate clients, courses, batches, attendance, examinations, training cards, certificates, and verification.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

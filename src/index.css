@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+:root {
+  --brand-primary: #0f172a;
+  --brand-secondary: #0284c7;
+  --font-display: 'Plus Jakarta Sans', 'IBM Plex Sans Arabic', system-ui, sans-serif;
+  --font-body: 'DM Sans', 'IBM Plex Sans Arabic', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+[dir='rtl'] body {
+  font-family: 'IBM Plex Sans Arabic', 'DM Sans', system-ui, sans-serif;
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: var(--font-display);
+  text-wrap: balance;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.font-mono-tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+#tcms-pdf-print-portal {
+  display: none;
+}
+
+@media print {
+  body > *:not(#tcms-pdf-print-portal) {
+    display: none !important;
+  }
+  #tcms-pdf-print-portal {
+    display: block !important;
+  }
+  #tcms-pdf-print-portal img {
+    display: block;
+    width: 100%;
+    height: auto;
+    page-break-after: always;
+    break-after: page;
+  }
+  #tcms-pdf-print-portal img:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+}
