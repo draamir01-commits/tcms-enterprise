@@ -2,8 +2,29 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const DATA_DIR = path.resolve(process.cwd(), '.data');
-const SECRET_FILE = path.join(DATA_DIR, '.server-secret');
+let DATA_DIR = path.resolve(process.cwd(), '.data');
+
+function ensureDataDir() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+  } catch {
+    DATA_DIR = path.join('/tmp', 'tcms_data');
+    if (!fs.existsSync(DATA_DIR)) {
+      try {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      } catch {
+        // Fallback
+      }
+    }
+  }
+}
+
+const getSecretFilePath = () => {
+  ensureDataDir();
+  return path.join(DATA_DIR, '.server-secret');
+};
 
 let warnedWeakKey = false;
 
@@ -18,17 +39,24 @@ function getMasterSecret(): Buffer {
       '[TCMS Security] SERVER_ENCRYPTION_KEY is not set to a persistent secret in production. Configure SERVER_ENCRYPTION_KEY in Secret Manager so encrypted PII and HMAC hashes survive container restarts.'
     );
   }
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-  if (fs.existsSync(SECRET_FILE)) {
-    const hex = fs.readFileSync(SECRET_FILE, 'utf8').trim();
-    if (hex.length === 64) {
-      return Buffer.from(hex, 'hex');
+  ensureDataDir();
+  const secretFile = getSecretFilePath();
+  if (fs.existsSync(secretFile)) {
+    try {
+      const hex = fs.readFileSync(secretFile, 'utf8').trim();
+      if (hex.length === 64) {
+        return Buffer.from(hex, 'hex');
+      }
+    } catch {
+      // ignore
     }
   }
   const generated = crypto.randomBytes(32);
-  fs.writeFileSync(SECRET_FILE, generated.toString('hex'), { mode: 0o600 });
+  try {
+    fs.writeFileSync(secretFile, generated.toString('hex'), { mode: 0o600 });
+  } catch {
+    // If even tmp is unwritable, return generated secret in-memory
+  }
   return generated;
 }
 

@@ -330,7 +330,7 @@ export function createCoreRouter(): Router {
   router.put(
     '/permissions/matrix',
     requireAuth,
-    requireRole(['super_admin']),
+    requireRole(['super_admin', 'admin']),
     async (req: AuthedRequest, res) => {
       try {
         const normalized = normalizePermissionMatrix(req.body?.matrix);
@@ -580,7 +580,7 @@ export function createCoreRouter(): Router {
   router.put(
     '/company-settings',
     requireAuth,
-    requireRole(['super_admin']),
+    requireRole(['super_admin', 'admin']),
     async (req: AuthedRequest, res) => {
       try {
         const body = (req.body || {}) as Partial<CompanySettings>;
@@ -635,7 +635,7 @@ export function createCoreRouter(): Router {
   router.get(
     '/system-settings',
     requireAuth,
-    requireRole(['super_admin']),
+    requireRole(['super_admin', 'admin']),
     async (req: AuthedRequest, res) => {
       try {
         const tId = req.tenantId!;
@@ -692,7 +692,7 @@ export function createCoreRouter(): Router {
   router.put(
     '/system-settings/integrations',
     requireAuth,
-    requireRole(['super_admin']),
+    requireRole(['super_admin', 'admin']),
     async (req: AuthedRequest, res) => {
       try {
         const scopedIntDocId = `${req.tenantId!}_integrations`;
@@ -778,7 +778,7 @@ export function createCoreRouter(): Router {
   router.put(
     '/system-settings/general',
     requireAuth,
-    requireRole(['super_admin']),
+    requireRole(['super_admin', 'admin']),
     async (req: AuthedRequest, res) => {
       try {
         const body = req.body as Record<string, unknown>;

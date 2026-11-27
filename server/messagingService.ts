@@ -800,8 +800,29 @@ export async function sendWhatsappCloudMessage(params: {
 // ---------------------------------------------------------------------------
 // Webhook Receipts Store & Reconciliation (Delivered / Failed from Provider)
 // ---------------------------------------------------------------------------
-const RECEIPT_DIR = path.resolve(process.cwd(), '.data');
-const RECEIPT_FILE = path.join(RECEIPT_DIR, 'webhook_receipts.json');
+let RECEIPT_DIR = path.resolve(process.cwd(), '.data');
+
+function ensureReceiptDir() {
+  try {
+    if (!fs.existsSync(RECEIPT_DIR)) {
+      fs.mkdirSync(RECEIPT_DIR, { recursive: true });
+    }
+  } catch {
+    RECEIPT_DIR = path.join('/tmp', 'tcms_data');
+    if (!fs.existsSync(RECEIPT_DIR)) {
+      try {
+        fs.mkdirSync(RECEIPT_DIR, { recursive: true });
+      } catch {
+        // Fallback
+      }
+    }
+  }
+}
+
+const getReceiptFilePath = () => {
+  ensureReceiptDir();
+  return path.join(RECEIPT_DIR, 'webhook_receipts.json');
+};
 
 export interface PendingProviderReceipt {
   providerMessageId: string;
@@ -812,8 +833,9 @@ export interface PendingProviderReceipt {
 
 function loadPendingReceipts(): PendingProviderReceipt[] {
   try {
-    if (!fs.existsSync(RECEIPT_FILE)) return [];
-    const parsed = JSON.parse(fs.readFileSync(RECEIPT_FILE, 'utf8'));
+    const fPath = getReceiptFilePath();
+    if (!fs.existsSync(fPath)) return [];
+    const parsed = JSON.parse(fs.readFileSync(fPath, 'utf8'));
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -821,10 +843,12 @@ function loadPendingReceipts(): PendingProviderReceipt[] {
 }
 
 function savePendingReceipts(receipts: PendingProviderReceipt[]): void {
-  if (!fs.existsSync(RECEIPT_DIR)) {
-    fs.mkdirSync(RECEIPT_DIR, { recursive: true });
+  try {
+    const fPath = getReceiptFilePath();
+    fs.writeFileSync(fPath, JSON.stringify(receipts, null, 2));
+  } catch {
+    // Non-fatal if filesystem is fully read-only
   }
-  fs.writeFileSync(RECEIPT_FILE, JSON.stringify(receipts, null, 2));
 }
 
 export function enqueueProviderReceipts(incoming: PendingProviderReceipt[]): number {
