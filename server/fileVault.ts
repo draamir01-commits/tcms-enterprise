@@ -3,11 +3,22 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { STORAGE_BUCKET } from './firestoreRest.ts';
 
-const VAULT_DIR = path.resolve(process.cwd(), '.data', 'vault');
+let VAULT_DIR = path.resolve(process.cwd(), '.data', 'vault');
 
 function ensureVaultDir() {
-  if (!fs.existsSync(VAULT_DIR)) {
-    fs.mkdirSync(VAULT_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(VAULT_DIR)) {
+      fs.mkdirSync(VAULT_DIR, { recursive: true });
+    }
+  } catch {
+    VAULT_DIR = path.join('/tmp', 'tcms_vault');
+    if (!fs.existsSync(VAULT_DIR)) {
+      try {
+        fs.mkdirSync(VAULT_DIR, { recursive: true });
+      } catch {
+        // Fallback
+      }
+    }
   }
 }
 
